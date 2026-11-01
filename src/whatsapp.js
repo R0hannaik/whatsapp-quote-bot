@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   DATA_DIR, getGroup, listGroups, upsertLiveGroup, markGroupsLeft, patchGroup, incrementQuotes,
-  createInquiry, getSettings, addCustomGroup,
+  createInquiry, getSettings, addCustomGroup, setCurrentAccount,
 } from './db.js';
 import { planReplies } from './bot.js';
 
@@ -85,6 +85,7 @@ export async function startWhatsApp() {
       wa.qr = null;
       wa.lastError = null;
       wa.me = { id: jidNormalizedUser(sock.user?.id), lid: sock.user?.lid, name: sock.user?.name || sock.user?.verifiedName || '' };
+      setCurrentAccount(wa.me.id);   // show this number's groups (a different number won't see the old ones)
       console.log('[wa] connected as', wa.me.id);
       syncGroups().catch(e => console.warn('[wa] group sync failed:', e.message));
     }
@@ -96,6 +97,8 @@ export async function startWhatsApp() {
         console.log('[wa] logged out — clearing session, a new QR will appear');
         wa.status = 'logged_out';
         wa.me = null;
+        setCurrentAccount('');           // unlinked from the phone: hide this number's groups
+        groupMeta.clear();
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
         reconnectTimer = setTimeout(startWhatsApp, 1500);
       } else {
@@ -141,6 +144,7 @@ function amIAdmin(meta) {
 function saveMeta(meta) {
   if (!meta?.id) return;
   groupMeta.set(meta.id, meta);
+  if (!wa.me) return;                       // not linked (yet) — nothing to save groups under
   upsertLiveGroup({ jid: meta.id, name: meta.subject, members: meta.size || meta.participants?.length || 0, is_admin: amIAdmin(meta) });
 }
 
@@ -159,6 +163,8 @@ export async function logoutWhatsApp() {
   try { await wa.sock?.logout(); } catch { /* ignore */ }
   fs.rmSync(AUTH_DIR, { recursive: true, force: true });
   wa.status = 'logged_out'; wa.me = null;
+  setCurrentAccount('');
+  groupMeta.clear();
   clearTimeout(reconnectTimer);
   reconnectTimer = setTimeout(startWhatsApp, 1500);
 }

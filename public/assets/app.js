@@ -87,8 +87,11 @@ const WA_TEXT = { open: 'WhatsApp connected', qr: 'Scan QR to link', connecting:
 async function pollStatus() {
   try {
     const s = await api('GET', '/api/status');
+    const prevAccount = state.status?.whatsapp?.me?.id ?? null;
     state.status = s;
     const st = s.whatsapp.status;
+    const account = s.whatsapp.me?.id ?? null;
+    if (account !== prevAccount && (account || st === 'logged_out') && ['groups', 'join'].includes(state.tab)) guard(LOADERS[state.tab])();
     $('#waPill').dataset.status = st;
     $('#waPillText').textContent = st === 'open' && s.whatsapp.me ? `Connected · +${(s.whatsapp.me.id || '').split('@')[0]}` : WA_TEXT[st] || st;
     const alert = $('#connAlert');
@@ -349,7 +352,8 @@ function renderGroupRows() {
     if (type && g.type !== type) return false;
     return !ql || g.name.toLowerCase().includes(ql) || g.jid.includes(ql);
   });
-  $('#grpCount').textContent = `Showing ${rows.length} of ${state.groups.length} groups`;
+  const me = state.status?.whatsapp?.me?.id;
+  $('#grpCount').textContent = `Showing ${rows.length} of ${state.groups.length} groups${me ? ` · +${me.split('@')[0]}` : ''}`;
   $('#grpRows').innerHTML = rows.length ? rows.map(g => `<tr>
     <td><div class="chem-name" style="margin-bottom:2px">${esc(g.name)} ${g.is_admin ? '<span class="badge b-blue" style="font-size:11.5px;padding:1px 7px">Admin</span>' : ''}</div><div class="mono faint" style="font-size:13.5px">${esc(g.jid)}</div></td>
     <td>${g.left_group ? '<span class="badge b-red">Left / Removed</span>' : g.type === 'custom' ? '<span class="badge b-violet">Custom</span>' : '<span class="badge b-green">Live WhatsApp Group</span>'}</td>
@@ -358,7 +362,9 @@ function renderGroupRows() {
     <td class="center"><label class="toggle"><input type="checkbox" data-toggle="${esc(g.jid)}" ${g.auto_reply ? 'checked' : ''} ${g.left_group ? 'disabled' : ''}><span></span></label>
       <span class="toggle-label ${g.auto_reply ? 'on' : ''}">${g.auto_reply ? 'ON' : 'OFF'}</span></td>
     <td class="center">${g.type === 'custom' || g.left_group ? `<button class="link-danger" title="Remove from dashboard" data-del-group="${esc(g.jid)}">×</button>` : ''}</td></tr>`).join('')
-    : `<tr><td colspan="6" class="empty">${state.groups.length ? 'No groups match your filters.' : 'No groups yet. Link WhatsApp and press <b>Sync Live Groups</b>.'}</td></tr>`;
+    : `<tr><td colspan="6" class="empty">${state.groups.length ? 'No groups match your filters.'
+      : ['logged_out', 'qr'].includes(state.status?.whatsapp?.status) ? 'No WhatsApp number is linked. <b>Link WhatsApp</b> to see its groups.'
+      : 'No groups yet. Press <b>Sync Live Groups</b>.'}</td></tr>`;
 }
 const syncGroups = guard(async () => {
   const btns = $$('[data-sync], [data-act=sync]'); btns.forEach(b => b.disabled = true);

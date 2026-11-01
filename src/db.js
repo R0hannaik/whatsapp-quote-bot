@@ -186,21 +186,71 @@ export function updateChemical(id, c) {
 }
 export const deleteChemical = id => db.prepare('DELETE FROM chemicals WHERE id = ?').run(id);
 
-/* ---------------- groups ---------------- */
-const hydrateGroup = g => g && ({ ...g, auto_reply: !!g.auto_reply, is_admin: !!g.is_admin, join_qr: !!g.join_qr, left_group: !!g.left_group });
-export const listGroups = () => db.prepare('SELECT * FROM groups ORDER BY left_group, auto_reply DESC, name COLLATE NOCASE').all().map(hydrateGroup);
-export const getGroup = jid => hydrateGroup(db.prepare('SELECT * FROM groups WHERE jid = ?').get(jid));
+/* ---------------- groups ----------------
+ * Groups belong to the WhatsApp number that was linked when they were synced (column `account`).
+ * Only the currently linked number's groups are visible; unlinking hides them, relinking the same number
+ * brings them back with their toggles. */
+(function migrateGroups() {
+  const cols = db.prepare("PRAGMA table_info(groups)").all().map(c => c.name);
+  if (cols.includes('account')) return;
+  db.transaction(() => {
+    db.exec(`ALTER TABLE groups RENAME TO groups_old;
+      CREATE TABLE groups (
+        account           TEXT NOT NULL,
+        jid               TEXT NOT NULL,
+        name              TEXT NOT NULL,
+        type              TEXT NOT NULL DEFAULT 'live',
+        members           INTEGER NOT NULL DEFAULT 0,
+        quotes_sent       INTEGER NOT NULL DEFAULT 0,
+        auto_reply        INTEGER NOT NULL DEFAULT 0,
+        is_admin          INTEGER NOT NULL DEFAULT 0,
+        join_qr           INTEGER NOT NULL DEFAULT 0,
+        invite_code       TEXT,
+        invite_rotated_at TEXT,
+        invite_error      TEXT,
+        left_group        INTEGER NOT NULL DEFAULT 0,
+        last_synced       TEXT,
+        created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (account, jid)
+      );
+      INSERT INTO groups(account, jid, name, type, members, quotes_sent, auto_reply, is_admin, join_qr, invite_code,
+        invite_rotated_at, invite_error, left_group, last_synced, created_at)
+      SELECT '__legacy__', jid, name, type, members, quotes_sent, auto_reply, is_admin, join_qr, invite_code,
+        invite_rotated_at, invite_error, left_group, last_synced, created_at FROM groups_old;
+      DROP TABLE groups_old;`);
+  })();
+})();
 
+/** The WhatsApp number currently linked (e.g. 9198…@s.whatsapp.net), or '' when none. */
+export const currentAccount = () => getSetting('wa_account') || '';
+export function setCurrentAccount(account) {
+  setSetting('wa_account', account || '');
+  if (account) {   // groups saved before this update belong to the first number that links
+    db.prepare("UPDATE OR IGNORE groups SET account = ? WHERE account = '__legacy__'").run(account);
+    db.prepare("DELETE FROM groups WHERE account = '__legacy__'").run();
+  }
+}
+
+const hydrateGroup = g => g && ({ ...g, auto_reply: !!g.auto_reply, is_admin: !!g.is_admin, join_qr: !!g.join_qr, left_group: !!g.left_group });
+export const listGroups = () => db.prepare('SELECT * FROM groups WHERE account = ? ORDER BY left_group, auto_reply DESC, name COLLATE NOCASE')
+  .all(currentAccount()).map(hydrateGroup);
+export const getGroup = jid => hydrateGroup(db.prepare('SELECT * FROM groups WHERE account = ? AND jid = ?').get(currentAccount(), jid));
+
+function requireAccount() {
+  const a = currentAccount();
+  if (!a) throw new Error('Link a WhatsApp number first');
+  return a;
+}
 export function upsertLiveGroup({ jid, name, members, is_admin }) {
-  db.prepare(`INSERT INTO groups(jid, name, type, members, is_admin, left_group, last_synced)
-      VALUES(@jid, @name, 'live', @members, @is_admin, 0, datetime('now'))
-    ON CONFLICT(jid) DO UPDATE SET name=excluded.name, members=excluded.members, is_admin=excluded.is_admin,
+  db.prepare(`INSERT INTO groups(account, jid, name, type, members, is_admin, left_group, last_synced)
+      VALUES(@account, @jid, @name, 'live', @members, @is_admin, 0, datetime('now'))
+    ON CONFLICT(account, jid) DO UPDATE SET name=excluded.name, members=excluded.members, is_admin=excluded.is_admin,
       type=CASE WHEN groups.type='custom' THEN 'live' ELSE groups.type END,
-      left_group=0, last_synced=datetime('now')`).run({ jid, name: name || jid, members: members || 0, is_admin: is_admin ? 1 : 0 });
+      left_group=0, last_synced=datetime('now')`).run({ account: requireAccount(), jid, name: name || jid, members: members || 0, is_admin: is_admin ? 1 : 0 });
 }
 export function addCustomGroup({ jid, name }) {
-  db.prepare(`INSERT INTO groups(jid, name, type) VALUES(?, ?, 'custom')
-    ON CONFLICT(jid) DO UPDATE SET name=excluded.name`).run(jid, name || jid);
+  db.prepare(`INSERT INTO groups(account, jid, name, type) VALUES(?, ?, ?, 'custom')
+    ON CONFLICT(account, jid) DO UPDATE SET name=excluded.name`).run(requireAccount(), jid, name || jid);
   return getGroup(jid);
 }
 export function patchGroup(jid, patch) {
@@ -210,16 +260,17 @@ export function patchGroup(jid, patch) {
     sets.push(`${k} = @${k}`);
     vals[k] = typeof patch[k] === 'boolean' ? (patch[k] ? 1 : 0) : patch[k];
   }
-  if (sets.length) db.prepare(`UPDATE groups SET ${sets.join(', ')} WHERE jid = @jid`).run({ ...vals, jid });
+  if (sets.length) db.prepare(`UPDATE groups SET ${sets.join(', ')} WHERE account = @account AND jid = @jid`).run({ ...vals, jid, account: currentAccount() });
   return getGroup(jid);
 }
 export const markGroupsLeft = jids => {
-  const st = db.prepare("UPDATE groups SET left_group = 1, auto_reply = 0 WHERE jid = ? AND type = 'live'");
-  db.transaction(list => list.forEach(j => st.run(j)))(jids);
+  const st = db.prepare("UPDATE groups SET left_group = 1, auto_reply = 0 WHERE account = ? AND jid = ? AND type = 'live'");
+  const a = currentAccount();
+  db.transaction(list => list.forEach(j => st.run(a, j)))(jids);
 };
-export const incrementQuotes = jid => db.prepare('UPDATE groups SET quotes_sent = quotes_sent + 1 WHERE jid = ?').run(jid);
-export const allAutoReplyOff = () => db.prepare('UPDATE groups SET auto_reply = 0').run();
-export const deleteGroup = jid => db.prepare("DELETE FROM groups WHERE jid = ?").run(jid);
+export const incrementQuotes = jid => db.prepare('UPDATE groups SET quotes_sent = quotes_sent + 1 WHERE account = ? AND jid = ?').run(currentAccount(), jid);
+export const allAutoReplyOff = () => db.prepare('UPDATE groups SET auto_reply = 0').run();   // every number, to be safe
+export const deleteGroup = jid => db.prepare('DELETE FROM groups WHERE account = ? AND jid = ?').run(currentAccount(), jid);
 
 /* ---------------- templates ---------------- */
 export function getTemplates() {
