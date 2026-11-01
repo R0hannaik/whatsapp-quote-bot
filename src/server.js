@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-if (fs.existsSync('.env')) process.loadEnvFile('.env');
+// Tests set QB_NO_DOTENV so your real .env (password, phone, data folder) never leaks into them.
+if (!process.env.QB_NO_DOTENV && fs.existsSync('.env')) process.loadEnvFile('.env');
 
 const express = (await import('express')).default;
 const db = await import('./db.js');
@@ -238,14 +239,19 @@ app.post('/api/settings/password', wrap(async (req, res) => { await changePasswo
 
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 // eslint-disable-next-line no-unused-vars
-app.use((err, _req, res, _next) => { console.error(err); res.status(err.status || 500).json({ error: err.expose ? err.message : 'Server error' }); });
+app.use((err, _req, res, _next) => { if (!err.status || err.status >= 500) console.error(err); res.status(err.status || 500).json({ error: err.expose ? err.message : 'Server error' }); });
 
-const PORT = Number(process.env.PORT || 3000);
-const HOST = process.env.HOST || '127.0.0.1';   // only this computer by default; set HOST=0.0.0.0 to open to the network
-app.listen(PORT, HOST, () => {
-  console.log(`\n  ✔ Dashboard running on http://localhost:${PORT}${HOST === '127.0.0.1' ? '  (this computer only)' : `  (listening on ${HOST})`}\n`);
-  if (HOST !== '127.0.0.1' && HOST !== 'localhost') console.log('  ⚠  The dashboard is reachable from other devices. Use HTTPS (a reverse proxy) before exposing it to the internet.\n');
-});
+export { app };
 
-waMod.startWhatsApp().catch(e => { console.error('[wa] failed to start:', e); wa.status = 'disconnected'; wa.lastError = e.message; });
-waMod.startInviteRotation();
+// Start the web server and WhatsApp only when run directly (`npm start`), not when imported by the tests.
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  const PORT = Number(process.env.PORT || 3000);
+  const HOST = process.env.HOST || '127.0.0.1';   // only this computer by default; set HOST=0.0.0.0 to open to the network
+  app.listen(PORT, HOST, () => {
+    console.log(`\n  ✔ Dashboard running on http://localhost:${PORT}${HOST === '127.0.0.1' ? '  (this computer only)' : `  (listening on ${HOST})`}\n`);
+    if (HOST !== '127.0.0.1' && HOST !== 'localhost') console.log('  ⚠  The dashboard is reachable from other devices. Use HTTPS (a reverse proxy) before exposing it to the internet.\n');
+  });
+  waMod.startWhatsApp().catch(e => { console.error('[wa] failed to start:', e); wa.status = 'disconnected'; wa.lastError = e.message; });
+  waMod.startInviteRotation();
+}

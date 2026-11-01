@@ -85,7 +85,7 @@ export async function login(req, res) {
   const ok = await verifyPassword(typeof req.body?.password === 'string' ? req.body.password : '', getSetting('password_hash'));
   if (!ok) {
     recent.push(now); attempts.set(ip, recent); globalFails.push(now);
-    console.warn(`[auth] failed login from ${ip} (${recent.length} in 15 min)`);
+    if (!process.env.QB_QUIET) console.warn(`[auth] failed login from ${ip} (${recent.length} in 15 min)`);
     await new Promise(r => setTimeout(r, 400 + Math.random() * 400));
     return res.status(401).json({ error: 'Incorrect password' });
   }

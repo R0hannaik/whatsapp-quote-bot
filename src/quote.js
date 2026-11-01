@@ -103,5 +103,10 @@ export function render(template, vars) {
 /** The rate actually quoted, as a short string for the orders table. */
 export function quotedRateSummary(chem, analysis) {
   const d = rateDetails(chem, analysis).replace(/[*_💰]/g, '').replace(/\s+/g, ' ').trim();
-  return d.replace(/^Rates? by Origin \/ Mfr: ?/, '').replace(/^Rate[^:]*: /, '').slice(0, 160);
+  // "Rate – Korea (Aekyung): ₹110" → "Korea (Aekyung): ₹110" · "Rate (IGPL): ₹199" → "IGPL: ₹199" · "Rate: ₹102" → "₹102"
+  return d.replace(/^Rates? by Origin \/ Mfr: ?/, '')
+    .replace(/^Rate – /, '')
+    .replace(/^Rate \(([^)]*)\): /, '$1: ')
+    .replace(/^Rate: /, '')
+    .slice(0, 160);
 }

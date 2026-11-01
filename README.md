@@ -90,4 +90,20 @@ Your part:
 
 ## Tests
 
-`npm test` runs the message-understanding checks (Hinglish enquiries, typos, seller posts, multi-chemical messages).
+```bash
+npm test            # everything (~1 min): 148 checks
+npm run test:quick  # just message reading, quotes, replies and database (a few seconds)
+```
+
+| File | What it checks |
+|---|---|
+| `test/parser.test.js` | Reading messages: enquiries vs chit-chat/seller posts, aliases, typos, Hinglish, quantities & units, origins, negotiation words, multi-product lists |
+| `test/quote.test.js` | Quote text: rates by origin, hidden empty lines, every template and preset renders cleanly |
+| `test/bot.test.js` | Which reply is sent: single vs combined, Deal template, out-of-stock, paused chemicals, unmatched replies, preview |
+| `test/db.test.js` | Groups per linked number (incl. upgrading old databases), `.env` settings, chemicals, templates, orders history & filters |
+| `test/whatsapp.test.js` | Live handler with a fake WhatsApp: auto-reply toggles, Test mode, reply-loop guard, cooldowns, group cap, orders records, owner replies, join-link rotation, unlink |
+| `test/api.test.js` | Dashboard server: login, every endpoint, validation, cross-site protection, security headers, CSV formula safety, sessions, brute-force lockout |
+| `test/ui.test.js` | Clicks through the dashboard in headless Chrome (skipped if Chrome isn't installed; set `CHROME_PATH` to use another) |
+
+Tests use a temporary database and never read your `.env` or connect to WhatsApp. GitHub runs them on every push
+(see the *Actions* tab).

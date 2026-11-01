@@ -6,7 +6,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node test/parser.test.js"
+    "test": "node --test test/*.test.js",
+    "test:quick": "node --test test/parser.test.js test/quote.test.js test/bot.test.js test/db.test.js"
   },
   "engines": {
     "node": ">=20"
@@ -17,5 +18,8 @@
     "express": "^5.3.0",
     "pino": "^10.4.0",
     "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.16.0"
   }
 }

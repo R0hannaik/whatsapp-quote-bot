@@ -36,7 +36,7 @@ function logActivity(e) {
   activity.unshift(entry);
   if (activity.length > 150) activity.length = 150;
   const who = e.sender ? ` ${e.sender}` : '';
-  console.log(`[bot] ${e.result.toUpperCase()} · ${e.chatName || e.chat || ''}${who} · "${(e.text || '').slice(0, 60)}"${e.detail ? ' → ' + e.detail : ''}`);
+  if (!process.env.QB_QUIET) console.log(`[bot] ${e.result.toUpperCase()} · ${e.chatName || e.chat || ''}${who} · "${(e.text || '').slice(0, 60)}"${e.detail ? ' → ' + e.detail : ''}`);
 }
 const cooldown = new Map();           // `${group}|${sender}|${chem}` -> ts
 const groupBurst = new Map();         // group -> [ts]
@@ -204,7 +204,7 @@ export async function logoutWhatsApp() {
     setCurrentAccount('');
     groupMeta.clear();
     unlinking = false;
-    console.log(confirmed ? '[wa] unlinked — WhatsApp confirmed the device was removed' : `[wa] unlinked locally, but ${reason}. Remove it on the phone: Settings → Linked devices.`);
+    if (!process.env.QB_QUIET) console.log(confirmed ? '[wa] unlinked — WhatsApp confirmed the device was removed' : `[wa] unlinked locally, but ${reason}. Remove it on the phone: Settings → Linked devices.`);
     reconnectTimer = setTimeout(startWhatsApp, 1500);   // show a fresh QR
   }
   return { confirmed, reason };

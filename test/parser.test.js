@@ -1,85 +1,121 @@
-// Run: npm test  — checks the message parser against real-world style group messages.
+// Message understanding: is it an enquiry, which chemicals, quantities, origins, places, negotiation, lists.
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyze, buildIndex } from '../src/parser.js';
-import { buildVars, render } from '../src/quote.js';
-import { DEFAULT_TEMPLATES } from '../src/presets.js';
+import { analyze, buildIndex, normalize } from '../src/parser.js';
+import { CHEMS } from './helpers.js';
 
-const chems = [
-  { id: 1, name: 'Phthalic Anhydride', alias_list: ['pa', 'p.a.', 'phthalic', 'phthalic anhydride', 'pthalic anhydride'], unit: 'kg', gst: 18, manufacturer: 'IGPL', packaging: '25 kgs Bag', location: 'Bhiwandi / Mumbai Ex-Godown', status: 'In Stock',
-    origin_rates: [{ country: 'India', brand: 'Reliance / IGPL', rate: 108.5 }, { country: 'Russia', brand: 'Imported', rate: 105 }, { country: 'Korea', brand: 'Aekyung', rate: 110 }], price: null },
-  { id: 2, name: 'Acrylic Acid', alias_list: ['aa', 'a.a.', 'acrylic', 'acrylic acid'], unit: 'kg', gst: 18, packaging: '200 kg Drum', status: 'In Stock', origin_rates: [{ country: 'China', brand: '', rate: 138 }], price: null },
-  { id: 3, name: 'Maleic Anhydride', alias_list: ['ma', 'm.a', 'maleic', 'maleic anhydride', 'malic'], unit: 'kg', gst: 18, manufacturer: 'Tengda', packaging: '25 kg Bag', status: 'In Stock', origin_rates: [{ country: 'China', brand: 'Tengda', rate: 165 }, { country: 'China', brand: 'Boiko', rate: 168 }], price: null },
-  { id: 4, name: 'Monosodium Glutamate', alias_list: ['msg', 'm.s.g.'], unit: 'kg', gst: 5, manufacturer: 'MEIHUA', packaging: '25 kgs Bag', status: 'Limited', origin_rates: [], price: 120 },
-  { id: 5, name: 'Isopropyl Alcohol', alias_list: ['ipa', 'isopropyl alcohol', 'isopropanol'], unit: 'kg', gst: 18, packaging: '160 kg Drum', status: 'In Stock', origin_rates: [], price: 102 },
-];
-const index = buildIndex(chems);
+const index = buildIndex(CHEMS);
 const opts = { index, maxLength: 450, ignoreKeywords: 'selling, for sale, we offer, offering, avl with us, available with us' };
-const A = t => analyze(t, chems, opts);
+const A = t => analyze(t, CHEMS, opts);
 const names = r => r.items.map(i => i.chem.name);
 
-const cases = [
-  ['PA 2 ton Bhiwandi rate urgent chahiye', true, ['Phthalic Anhydride'], r => { assert.equal(r.quantity.text, '2 TON'); assert.equal(r.location, 'Bhiwandi'); }],
-  ['Need p.a. 5mt', true, ['Phthalic Anhydride'], r => assert.equal(r.quantity.text, '5 MT')],
-  ['pthalic anhydrite rate pls', true, ['Phthalic Anhydride']],
-  ['Required MA china 10 MT Vapi', true, ['Maleic Anhydride'], r => { assert.deepEqual(r.origins, ['China']); assert.equal(r.location, 'Vapi'); }],
-  ['MSG available?', true, ['Monosodium Glutamate']],
-  ['kisi ke paas IPA hai kya? 20 drums', true, ['Isopropyl Alcohol'], r => assert.equal(r.quantity.text, '20 DRUMS')],
-  ['AA and PA rate?', true, ['Acrylic Acid', 'Phthalic Anhydride']],
-  ['PA last rate kya hai? 10 ton', true, ['Phthalic Anhydride'], r => assert.equal(r.intent, 'deal')],
-  ['Korea PA rate', true, ['Phthalic Anhydride'], r => assert.deepEqual(r.origins, ['Korea'])],
-  ['maleicanhydride chahiye', true, ['Maleic Anhydride']],
-  // should NOT trigger
-  ['PA Korea available with us @ 104/kg Bhiwandi', false],
-  ['Selling MA china 160 ex Taloja', false],
-  ['Good morning all 🙏', false],
-  ['aa jao sab log party hai', false],
-  ['Happy Diwali to all members', false],
-];
+describe('recognises buy enquiries', () => {
+  const cases = [
+    ['PA 2 ton Bhiwandi rate urgent chahiye', ['Phthalic Anhydride']],
+    ['Need p.a. 5mt', ['Phthalic Anhydride']],
+    ['pthalic anhydrite rate pls', ['Phthalic Anhydride']],                 // typo
+    ['Required MA china 10 MT Vapi', ['Maleic Anhydride']],
+    ['MSG available?', ['Monosodium Glutamate']],
+    ['kisi ke paas IPA hai kya? 20 drums', ['Isopropyl Alcohol']],           // Hinglish
+    ['AA and PA rate?', ['Acrylic Acid', 'Phthalic Anhydride']],
+    ['maleicanhydride chahiye', ['Maleic Anhydride']],                      // joined words
+    ['Korea PA rate', ['Phthalic Anhydride']],
+  ];
+  for (const [msg, want] of cases) test(msg, () => {
+    const r = A(msg);
+    assert.equal(r.isRequest, true, r.skipReason);
+    assert.deepEqual(names(r), want);
+  });
+});
 
-let pass = 0;
-for (const [msg, want, wantNames, extra] of cases) {
-  const r = A(msg);
-  const ok = r.isRequest === want && (!want || !r.items.length === !wantNames?.length);
-  try {
-    assert.equal(r.isRequest && r.items.length > 0, want, `${msg} -> isRequest=${r.isRequest} items=${names(r)} skip=${r.skipReason}`);
-    if (wantNames) assert.deepEqual(names(r), wantNames, msg);
-    if (extra) extra(r);
-    pass++;
-  } catch (e) { console.error('FAIL:', e.message); process.exitCode = 1; }
-}
-console.log(`${pass}/${cases.length} parser cases passed`);
+describe('stays silent on non-enquiries', () => {
+  const cases = [
+    ['PA Korea available with us @ 104/kg Bhiwandi', /seller|price/],
+    ['Selling MA china 160 ex Taloja', /seller|price/],
+    ['Good morning all 🙏', /request|empty/],
+    ['aa jao sab log party hai', /request/],                               // "aa" is Hindi here, not Acrylic Acid
+    ['Happy Diwali to all members', /request/],
+    ['pa', /request/],
+  ];
+  for (const [msg, reason] of cases) test(msg, () => {
+    const r = A(msg);
+    assert.ok(!(r.isRequest && r.items.length), `should not reply: ${JSON.stringify(names(r))}`);
+    if (!r.isRequest) assert.match(r.skipReason, reason);
+  });
+  test('very long messages (price lists) are skipped', () => {
+    assert.match(A('PA rate need '.repeat(60)).skipReason, /too long/);
+  });
+  test('hard cap of 2000 characters even if the setting is 0', () => {
+    assert.match(analyze('x '.repeat(1100), CHEMS, { index, maxLength: 0 }).skipReason, /too long/);
+  });
+});
 
-// rendering
-const r = A('PA 2 ton Bhiwandi rate urgent chahiye');
-const vars = buildVars(r.items[0].chem, { ...r, alias: r.items[0].alias }, { business_name: 'Pawan Chemicals', contact_phone: '+91 90000 00000' });
-const out = render(DEFAULT_TEMPLATES.quote, vars);
-console.log('\n' + out + '\n');
-assert.match(out, /Requirement:\* 2 TON – Bhiwandi/);
-assert.match(out, /Phthalic Anhydride \(PA\)/);
-assert.match(out, /\+91 90000 00000/);
-const noQty = render(DEFAULT_TEMPLATES.quote, buildVars(chems[3], {}, {}));
-assert.doesNotMatch(noQty, /Requirement/);
-const korea = render('{rate_details}', buildVars(chems[0], A('Korea PA rate'), {}));
-assert.match(korea, /Korea \(Aekyung\): ?|Rate – Korea/);
-console.log('render checks passed');
+describe('details', () => {
+  test('quantity, unit and place', () => {
+    const r = A('PA 2 ton Bhiwandi rate urgent chahiye');
+    assert.equal(r.quantity.text, '2 TON');
+    assert.equal(r.location, 'Bhiwandi');
+  });
+  test('units', () => {
+    assert.equal(A('Need p.a. 5mt').quantity.text, '5 MT');
+    assert.equal(A('IPA 20 drums need').quantity.text, '20 DRUMS');
+    assert.equal(A('PA 12.5 MT need').quantity.text, '12.5 MT');
+  });
+  test('thousands separators vs decimal comma', () => {
+    assert.equal(A('maleic 1,000 kg need').quantity.text, '1000 KG');
+    assert.equal(A('PA 1,00,000 kg need').quantity.text, '100000 KG');
+    assert.equal(A('PA 2,5 MT need').quantity.text, '2.5 MT');
+  });
+  test('origin and brand', () => {
+    assert.deepEqual(A('Required MA china 10 MT Vapi').origins, ['China']);
+    assert.deepEqual(A('IGPL PA 2 mt rate?').items[0].brands, ['IGPL']);
+  });
+  test('negotiation words switch to the Deal template', () => {
+    assert.equal(A('PA last rate kya hai? 10 ton').intent, 'deal');
+    assert.equal(A('PA rate kya hai? 10 ton').intent, 'quote');
+    assert.equal(analyze('PA rate pls, workable?', CHEMS, { index, dealKeywords: 'workable' }).intent, 'deal');
+  });
+  test('normalize strips dots inside codes', () => {
+    assert.equal(normalize('P.A. / M.S.G!'), 'pa msg');
+  });
+  test('an enquiry for something not in the list is flagged for the owner', () => {
+    const r = A('Need DOP 5 drums rate pls');
+    assert.equal(r.isRequest, true);
+    assert.equal(r.items.length, 0);
+    assert.equal(r.unmatchedWorthy, true);
+  });
+});
 
-// per-chemical quantities
-const multi = A('Need ipa 20 drums and MSG 1 ton');
-assert.deepEqual(multi.items.map(i => `${i.chem.name}:${i.quantity?.text}`), ['Isopropyl Alcohol:20 DRUMS', 'Monosodium Glutamate:1 TON']);
-const shared = A('PA and MA rate 5 MT');
-assert.deepEqual(shared.items.map(i => i.quantity?.text), ['5 MT', '5 MT']);  // one qty for the whole message is shared
-console.log('per-item quantity checks passed:', shared.items.map(i => `${i.chem.name}:${i.quantity?.text}`));
-
-// ---- multi-product lists ----
-const L = (msg) => A(msg).items.map(i => `${i.chem.name}|${i.quantity?.text || '-'}|${(i.origins || []).join('/') || '-'}`);
-assert.deepEqual(L('Need rates:\n1. PA korea 2 MT\n2. MA china 5 MT\n3. IPA 20 drums'),
-  ['Phthalic Anhydride|2 MT|Korea', 'Maleic Anhydride|5 MT|China', 'Isopropyl Alcohol|20 DRUMS|-'], 'numbered list');
-assert.deepEqual(L('PA 2 MT, AA china 10 MT & IPA 5 drums rate pls'),
-  ['Phthalic Anhydride|2 MT|-', 'Acrylic Acid|10 MT|China', 'Isopropyl Alcohol|5 DRUMS|-'], 'origin only applies to its own product');
-assert.deepEqual(L('Rates for PA, MA, IPA - 5 MT each'), ['Phthalic Anhydride|5 MT|-', 'Maleic Anhydride|5 MT|-', 'Isopropyl Alcohol|5 MT|-'], '"each" shares the quantity');
-assert.deepEqual(L('PA 2 MT, MA rate pls'), ['Phthalic Anhydride|2 MT|-', 'Maleic Anhydride|-|-'], 'no quantity borrowed from another product');
-assert.deepEqual(L('Required, all china origin:\nAA 10 MT\nMA 5 MT'), ['Acrylic Acid|10 MT|China', 'Maleic Anhydride|5 MT|China'], 'list-wide origin');
-const un = A('Need:\n- PA 3 MT\n- DOP 1 tanker\n- maleic 1,000 kg');
-assert.deepEqual(un.unmatchedItems.map(u => `${u.name}|${u.quantity.text}`), ['DOP|1 TANKER'], 'unknown product picked out');
-assert.equal(un.items.find(i => i.chem.name === 'Maleic Anhydride').quantity.text, '1000 KG', 'thousands separator');
-console.log('multi-product list checks passed');
+describe('multi-product lists', () => {
+  const L = msg => A(msg).items.map(i => `${i.chem.name}|${i.quantity?.text || '-'}|${(i.origins || []).join('/') || '-'}`);
+  test('numbered list: own quantity and origin per product', () => {
+    assert.deepEqual(L('Need rates:\n1. PA korea 2 MT\n2. MA china 5 MT\n3. IPA 20 drums'),
+      ['Phthalic Anhydride|2 MT|Korea', 'Maleic Anhydride|5 MT|China', 'Isopropyl Alcohol|20 DRUMS|-']);
+  });
+  test('comma / & list: an origin only applies to its own product', () => {
+    assert.deepEqual(L('PA 2 MT, AA china 10 MT & IPA 5 drums rate pls'),
+      ['Phthalic Anhydride|2 MT|-', 'Acrylic Acid|10 MT|China', 'Isopropyl Alcohol|5 DRUMS|-']);
+  });
+  test('"each" shares one quantity', () => {
+    assert.deepEqual(L('Rates for PA, MA, IPA - 5 MT each'), ['Phthalic Anhydride|5 MT|-', 'Maleic Anhydride|5 MT|-', 'Isopropyl Alcohol|5 MT|-']);
+  });
+  test('a quantity after all products is shared', () => {
+    assert.deepEqual(L('PA and MA rate 5 MT'), ['Phthalic Anhydride|5 MT|-', 'Maleic Anhydride|5 MT|-']);
+  });
+  test("a product doesn't borrow another product's quantity", () => {
+    assert.deepEqual(L('PA 2 MT, MA rate pls'), ['Phthalic Anhydride|2 MT|-', 'Maleic Anhydride|-|-']);
+  });
+  test('two products, two quantities, joined by "and"', () => {
+    assert.deepEqual(L('Need ipa 20 drums and MSG 1 ton'), ['Isopropyl Alcohol|20 DRUMS|-', 'Monosodium Glutamate|1 TON|-']);
+  });
+  test('origin line for the whole list', () => {
+    assert.deepEqual(L('Required, all china origin:\nAA 10 MT\nMA 5 MT'), ['Acrylic Acid|10 MT|China', 'Maleic Anhydride|5 MT|China']);
+  });
+  test('list lines with products not in the matrix are picked out', () => {
+    const r = A('Need:\n- PA 3 MT\n- DOP 1 tanker\n- Toluene 5 MT');
+    assert.deepEqual(r.unmatchedItems.map(u => `${u.name}|${u.quantity.text}`), ['DOP|1 TANKER', 'Toluene|5 MT']);
+  });
+  test('header lines without an amount are not treated as products', () => {
+    assert.deepEqual(A('Please share best rates\nPA 2 MT\nMA 5 MT').unmatchedItems, []);
+  });
+});
