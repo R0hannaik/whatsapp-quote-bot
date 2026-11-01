@@ -6,7 +6,9 @@ import path from 'node:path';
 import { DEFAULT_TEMPLATES } from './presets.js';
 
 export const DATA_DIR = path.resolve(process.env.DATA_DIR || './data');
-fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+// The data folder holds the WhatsApp session keys and the password hash — keep it private to this user.
+try { fs.chmodSync(DATA_DIR, 0o700); } catch { /* not supported on this filesystem */ }
 
 export const db = new Database(path.join(DATA_DIR, 'quotebot.db'));
 db.pragma('journal_mode = WAL');
@@ -238,6 +240,8 @@ export function createInquiry(i) {
 export const getInquiry = id => hydrateInquiry(db.prepare('SELECT * FROM inquiries WHERE id = ?').get(id));
 
 export function listInquiries({ status, q, from, to, limit = 500 } = {}) {
+  limit = Math.min(Math.max(parseInt(limit, 10) || 500, 1), 50000);
+  q = q ? String(q).slice(0, 100) : '';
   const where = []; const p = {};
   if (status && status !== 'all') {
     if (status === 'open') where.push("status IN ('New','Quoted','Negotiating','Awaiting Owner','On Hold')");
@@ -246,7 +250,7 @@ export function listInquiries({ status, q, from, to, limit = 500 } = {}) {
   if (q) { where.push('(message LIKE @q OR chemical_name LIKE @q OR group_name LIKE @q OR sender_name LIKE @q OR sender_phone LIKE @q OR owner_notes LIKE @q)'); p.q = `%${q}%`; }
   if (from) { where.push("date(created_at, '+330 minutes') >= @from"); p.from = from; }
   if (to) { where.push("date(created_at, '+330 minutes') <= @to"); p.to = to; }
-  const sql = `SELECT * FROM inquiries ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ${Number(limit) || 500}`;
+  const sql = `SELECT * FROM inquiries ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ${limit}`;
   return db.prepare(sql).all(p).map(hydrateInquiry);
 }
 

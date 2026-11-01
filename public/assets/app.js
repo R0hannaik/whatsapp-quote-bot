@@ -691,6 +691,7 @@ async function loadSettings() {
       <div class="field"><label>New password</label><input class="input" type="password" id="pwNew" autocomplete="new-password" placeholder="At least 8 characters"></div>
       <button type="button" class="btn btn-dark btn-sm" id="pwSave">Change password</button>
       <p class="muted" style="font-size:14px">Changing the password logs out every other session.</p>
+      <button type="button" class="btn btn-danger-soft btn-sm" id="logoutAll">Log out all devices</button>
       <h3 style="margin-top:22px">WhatsApp account</h3>
       <button type="button" class="btn btn-light btn-sm" id="openConn">Connection &amp; QR</button></div>
     <div style="grid-column:1/-1;display:flex;justify-content:flex-end"><button class="btn btn-amber" type="submit">${ICON.save} Save Settings</button></div>
@@ -706,6 +707,10 @@ async function loadSettings() {
     toast('Password changed — please log in again'); setTimeout(() => location.href = '/login', 1200);
   });
   $('#openConn').onclick = openConnectionModal;
+  $('#logoutAll').onclick = guard(async () => {
+    if (!await confirmBox('Log out all devices?', 'Everyone signed in to this dashboard (including you) will need to log in again.', 'Log out all')) return;
+    await api('POST', '/api/settings/logout-all'); location.href = '/login';
+  });
 }
 function applyBrand() {
   const n = state.settings?.business_name || 'Quote Bot';

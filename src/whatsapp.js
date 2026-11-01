@@ -191,7 +191,16 @@ function senderInfo(msg) {
   const candidates = [k.participant, k.participantAlt, k.remoteJid, k.remoteJidAlt].filter(Boolean);
   const pn = candidates.find(j => j.endsWith('@s.whatsapp.net'));
   const jid = isJidGroup(k.remoteJid) ? (k.participant || k.participantAlt) : k.remoteJid;
-  return { jid, phone: pn ? '+' + pn.split('@')[0].split(':')[0] : '', name: msg.pushName || '' };
+  return { jid, phone: pn ? '+' + pn.split('@')[0].split(':')[0] : '', name: cleanName(msg.pushName) };
+}
+
+/** WhatsApp display names are chosen by the sender — strip formatting, links and length before we ever echo one. */
+function cleanName(n) {
+  return String(n || '')
+    .replace(/https?:\/\/\S+|www\.\S+|\S+\.(com|in|net|org|xyz|link|ly|me)\b\S*/gi, '')
+    .replace(/[*_~`<>{}\[\]\\]/g, '')
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+    .replace(/\s+/g, ' ').trim().slice(0, 40);
 }
 
 function allowedByRateLimit(group, sender, chemId, s) {
@@ -221,7 +230,7 @@ export async function handleMessage(msg) {
   if (sentIds.has(k.id)) return;                                   // our own reply echoing back
   const { jid, group } = findChat(msg);
   const chatName = group?.name || groupMeta.get(rawJid)?.subject || rawJid;
-  const text = textOf(msg).trim();
+  const text = textOf(msg).trim().slice(0, 4000);
   const sender = senderInfo(msg);
   const log = (result, detail) => logActivity({ chat: jid, chatName, sender: k.fromMe ? 'You (linked number)' : (sender.name || sender.phone), text, result, detail });
 

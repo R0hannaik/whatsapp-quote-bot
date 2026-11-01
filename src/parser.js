@@ -193,7 +193,8 @@ export function analyze(text, chemicals, opts = {}) {
   const toks = norm.split(' ').filter(Boolean);
   const res = { isRequest: false, skipReason: null, intent: 'quote', items: [], quantity: null, location: null, origins: [], brands: [] };
   if (!norm) { res.skipReason = 'empty'; return res; }
-  if (opts.maxLength && original.length > opts.maxLength) { res.skipReason = 'too long (looks like a price list / broadcast)'; return res; }
+  const limit = Math.min(Number(opts.maxLength) || 2000, 2000);   // hard cap keeps typo-matching cheap
+  if (original.length > limit) { res.skipReason = 'too long (looks like a price list / broadcast)'; return res; }
 
   const index = opts.index || buildIndex(chemicals);
   const qtys = detectQuantities(original);

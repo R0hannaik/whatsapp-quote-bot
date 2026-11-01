@@ -6,7 +6,7 @@ if (fs.existsSync('.env')) process.loadEnvFile('.env');
 
 const express = (await import('express')).default;
 const db = await import('./db.js');
-const { initPassword, changePassword, login, logout, requireAuth, isAuthed } = await import('./auth.js');
+const { initPassword, changePassword, login, logout, logoutEverywhere, requireAuth, isAuthed } = await import('./auth.js');
 const { planReplies, describe, invalidateCatalogue } = await import('./bot.js');
 const { PRESETS, DEFAULT_TEMPLATES, TEMPLATE_VARIABLES } = await import('./presets.js');
 const waMod = await import('./whatsapp.js');
@@ -21,13 +21,41 @@ const PUB = path.join(ROOT, 'public');
 const app = express();
 app.set('trust proxy', process.env.TRUST_PROXY === '1');
 app.disable('x-powered-by');
-app.use(express.json({ limit: '1mb' }));
 app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  // Only our own scripts may run; blocks injected <script> even if something slips past escaping.
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com", "img-src 'self' data:", "connect-src 'self'",
+    "frame-ancestors 'none'", "base-uri 'none'", "form-action 'self'", "object-src 'none'",
+  ].join('; '));
+  if (req.secure) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+  if (req.path.startsWith('/api/')) res.setHeader('Cache-Control', 'no-store');
   next();
 });
+
+// CSRF protection: state-changing requests must come from this dashboard's own pages.
+app.use((req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const site = req.headers['sec-fetch-site'];
+  const origin = req.headers.origin;
+  const host = req.headers['x-forwarded-host'] && app.get('trust proxy') ? req.headers['x-forwarded-host'] : req.headers.host;
+  let sameOrigin = site ? site === 'same-origin' || site === 'none' : true;
+  if (origin) { try { sameOrigin = sameOrigin && new URL(origin).host === host; } catch { sameOrigin = false; } }
+  if (!sameOrigin) return res.status(403).json({ error: 'Cross-site request blocked' });
+  if (req.headers['content-length'] > 0 && !req.is('application/json')) return res.status(415).json({ error: 'JSON only' });
+  next();
+});
+app.use(express.json({ limit: '256kb' }));
+
+const sameToken = t => {
+  const a = Buffer.from(String(t || '')), b = Buffer.from(String(db.getSetting('join_page_token') || ''));
+  return a.length === b.length && b.length > 0 && crypto.timingSafeEqual(a, b);
+};
 
 const wrap = fn => (req, res) => Promise.resolve().then(() => fn(req, res)).catch(e => res.status(400).json({ error: e.message }));
 
@@ -39,11 +67,11 @@ app.post('/api/logout', logout);
 
 // Public rotating join-QR page — only shows groups you switched on for it, protected by an unguessable token.
 app.get('/join/:token', (req, res) => {
-  if (req.params.token !== db.getSetting('join_page_token')) return res.status(404).send('Not found');
+  if (!sameToken(req.params.token)) return res.status(404).send('Not found');
   res.sendFile(path.join(PUB, 'join.html'));
 });
 app.get('/api/public/join/:token', wrap(async (req, res) => {
-  if (req.params.token !== db.getSetting('join_page_token')) return res.status(404).json({ error: 'Not found' });
+  if (!sameToken(req.params.token)) return res.status(404).json({ error: 'Not found' });
   res.json(await joinPayload(false));
 }));
 
@@ -56,7 +84,7 @@ async function joinPayload(includeErrors) {
     if (!g.invite_code && !includeErrors) continue;
     const rotated = g.invite_rotated_at ? Date.parse(g.invite_rotated_at) : null;
     out.push({
-      jid: g.jid, name: g.name, members: g.members, link: g.invite_code ? `https://chat.whatsapp.com/${g.invite_code}` : null,
+      ...(includeErrors ? { jid: g.jid, members: g.members } : {}), name: g.name, link: g.invite_code ? `https://chat.whatsapp.com/${g.invite_code}` : null,
       qr: await waMod.qrFor(g.invite_code), rotatedAt: g.invite_rotated_at,
       expiresAt: rotated ? new Date(rotated + minutes * 60000).toISOString() : null,
       ...(includeErrors ? { error: g.invite_error, is_admin: g.is_admin } : {}),
@@ -127,6 +155,7 @@ app.get('/api/templates', (_req, res) => res.json({ templates: db.getTemplates()
 app.put('/api/templates/:mode', wrap((req, res) => {
   if (!['quote', 'deal'].includes(req.params.mode)) throw new Error('Unknown template');
   if (!String(req.body?.body || '').trim()) throw new Error('Template cannot be empty');
+  if (String(req.body.body).length > 5000) throw new Error('Template is too long (max 5000 characters)');
   db.saveTemplate(req.params.mode, String(req.body.body)); res.json({ ok: true });
 }));
 app.post('/api/templates/:mode/reset', (req, res) => { db.resetTemplate(req.params.mode); res.json({ ok: true, body: DEFAULT_TEMPLATES[req.params.mode] }); });
@@ -134,7 +163,8 @@ app.post('/api/templates/:mode/reset', (req, res) => { db.resetTemplate(req.para
 // "Try a message": runs the real parser + template without sending anything.
 app.post('/api/simulate', wrap(async (req, res) => {
   const { message, mode, body, forceMode, useAi } = req.body || {};
-  const plan = await planReplies(String(message || ''), { templateOverride: mode && body ? { mode, body } : null, senderName: 'Rakesh', useAi: !!useAi });
+  if (String(body || '').length > 5000) throw new Error('Template is too long');
+  const plan = await planReplies(String(message || '').slice(0, 4000), { templateOverride: mode && body ? { mode, body } : null, senderName: 'Rakesh', useAi: !!useAi });
   let replies = plan.replies;
   // When previewing a template mode the message wouldn't trigger, render that mode anyway so the editor always shows something.
   if (forceMode && body && plan.analysis.items.length && !replies.some(r => r.intent === forceMode)) {
@@ -146,7 +176,7 @@ app.post('/api/simulate', wrap(async (req, res) => {
 }));
 
 /* inquiries / orders */
-app.get('/api/inquiries', (req, res) => res.json({ items: db.listInquiries(req.query), stats: db.inquiryStats(), statuses: db.INQUIRY_STATUSES }));
+app.get('/api/inquiries', (req, res) => res.json({ items: db.listInquiries({ ...req.query, limit: 500 }), stats: db.inquiryStats(), statuses: db.INQUIRY_STATUSES }));
 app.patch('/api/inquiries/:id', wrap((req, res) => {
   const { status } = req.body || {};
   if (status && !db.INQUIRY_STATUSES.includes(status)) throw new Error('Unknown status');
@@ -162,9 +192,10 @@ app.post('/api/inquiries/:id/message', wrap(async (req, res) => {
   res.json(db.updateInquiry(inq.id, { log: `Owner replied in group: "${text.slice(0, 120)}"` }));
 }));
 app.get('/api/inquiries.csv', (req, res) => {
-  const rows = db.listInquiries({ ...req.query, limit: 100000 });
+  const rows = db.listInquiries({ ...req.query, limit: 50000 });
   const cols = ['id', 'created_at', 'group_name', 'sender_name', 'sender_phone', 'message', 'chemical_name', 'quantity', 'location', 'origin', 'intent', 'quoted_rate', 'status', 'final_rate', 'final_qty', 'owner_notes'];
-  const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  // Prefix cells that Excel would treat as formulas (=, +, -, @) — WhatsApp text is untrusted.
+  const esc = v => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return `"${t.replace(/"/g, '""')}"`; };
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="orders.csv"');
   res.send('﻿' + [cols.join(','), ...rows.map(r => cols.map(c => esc(r[c])).join(','))].join('\n'));
@@ -185,21 +216,26 @@ app.put('/api/settings', wrap((req, res) => {
     let v = body[k];
     if (typeof def === 'number') { v = Number(v); if (!Number.isFinite(v) || v < 0) throw new Error(`Invalid value for ${k}`); }
     if (typeof def === 'boolean') v = !!v;
-    if (typeof def === 'string') v = String(v);
+    if (typeof def === 'string') { v = String(v); if (v.length > 2000) throw new Error(`${k} is too long`); }
     db.setSetting(k, v);
   }
   if (Number(db.getSetting('invite_rotate_minutes')) < 2) db.setSetting('invite_rotate_minutes', 2);
   invalidateCatalogue();
   res.json({ settings: db.getSettings() });
 }));
-app.post('/api/settings/password', wrap((req, res) => { changePassword(req.body?.current, req.body?.next); logout(req, res); }));
+app.post('/api/settings/logout-all', (req, res) => { logoutEverywhere(); logout(req, res); });
+app.post('/api/settings/password', wrap(async (req, res) => { await changePassword(req.body?.current, req.body?.next); logout(req, res); }));
 
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 // eslint-disable-next-line no-unused-vars
 app.use((err, _req, res, _next) => { console.error(err); res.status(err.status || 500).json({ error: err.expose ? err.message : 'Server error' }); });
 
 const PORT = Number(process.env.PORT || 3000);
-app.listen(PORT, process.env.HOST || '0.0.0.0', () => console.log(`\n  ✔ Dashboard running on http://localhost:${PORT}\n`));
+const HOST = process.env.HOST || '127.0.0.1';   // only this computer by default; set HOST=0.0.0.0 to open to the network
+app.listen(PORT, HOST, () => {
+  console.log(`\n  ✔ Dashboard running on http://localhost:${PORT}${HOST === '127.0.0.1' ? '  (this computer only)' : `  (listening on ${HOST})`}\n`);
+  if (HOST !== '127.0.0.1' && HOST !== 'localhost') console.log('  ⚠  The dashboard is reachable from other devices. Use HTTPS (a reverse proxy) before exposing it to the internet.\n');
+});
 
 waMod.startWhatsApp().catch(e => { console.error('[wa] failed to start:', e); wa.status = 'disconnected'; wa.lastError = e.message; });
 waMod.startInviteRotation();

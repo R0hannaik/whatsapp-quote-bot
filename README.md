@@ -42,7 +42,9 @@ npm start                   # → http://localhost:3000
 Keep it running with pm2: `npm i -g pm2 && pm2 start src/server.js --name quotebot && pm2 save`
 or Docker: `docker build -t quotebot . && docker run -d -p 3000:3000 --env-file .env -v $(pwd)/data:/app/data quotebot`
 
-For access from outside your network, put it behind HTTPS (Caddy / Nginx / Cloudflare Tunnel) and set `TRUST_PROXY=1`.
+By default the dashboard only accepts connections from the computer it runs on (`HOST=127.0.0.1`).
+To open it from your phone or another PC, set `HOST=0.0.0.0` — and if it will be reachable from the internet,
+put it behind HTTPS (Caddy / Nginx / Cloudflare Tunnel) and set `TRUST_PROXY=1`.
 
 ## Important notes
 
@@ -52,6 +54,34 @@ For access from outside your network, put it behind HTTPS (Caddy / Nginx / Cloud
 - For the rotating join QR, the bot's number must be an **admin** of the group.
 - Everything is stored in `data/` (SQLite database + WhatsApp session). Back up that folder; delete
   `data/wa-auth` to force a fresh WhatsApp login.
+
+## Security
+
+Built in:
+- **Login:** password stored as a salted scrypt hash; signed, HttpOnly session cookie (`Secure` over HTTPS);
+  8 failed attempts per IP → 15-minute lockout, plus a global lockout after 50 failures. *Settings → Security*
+  has *Change password* and *Log out all devices* (both end every existing session).
+- **Every page and API needs login** except `/login` and the public join-QR page, which needs a random secret link
+  and only shows group names and invite QRs.
+- **Cross-site request forgery** blocked (Origin / Sec-Fetch-Site checks, JSON-only API, SameSite cookie).
+- **Script injection** blocked: everything from WhatsApp (names, messages, group names) is escaped, and a strict
+  Content-Security-Policy allows only the app's own scripts. Also: no framing (clickjacking), `nosniff`, no API caching.
+- **Database:** all queries are parameterised; list sizes and inputs are capped. CSV export neutralises Excel formulas
+  (`=`, `+`, `-`, `@`) so a malicious WhatsApp message can't run code when the file is opened.
+- **Bot:** sender names are cleaned (no links/formatting) before they can appear in a reply; long messages are ignored;
+  per-person cooldown and per-group reply cap; never replies to its own messages; the optional AI step can only
+  pick a chemical from your list — prices always come from your matrix.
+- **Files:** `data/` (WhatsApp session keys, password hash) is created with owner-only permissions; `.env` and `data/`
+  are git-ignored. The Docker image runs as a non-root user.
+
+Your part:
+- Use a strong dashboard password and keep `.env` and `data/` private and backed up — anyone with `data/wa-auth`
+  can act as the bot's WhatsApp number. If the laptop is shared, enable FileVault (macOS disk encryption).
+- Don't expose the dashboard to the internet over plain HTTP. Use HTTPS, or a tunnel with its own login
+  (e.g. Cloudflare Access / Tailscale).
+- If the bot's phone or a backup is lost: *Settings → Unlink this number*, and also remove the device from
+  WhatsApp → Settings → Linked devices on the phone.
+- Run `npm audit` occasionally and update dependencies.
 
 ## Tests
 
