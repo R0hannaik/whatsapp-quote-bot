@@ -142,9 +142,12 @@ function openConnectionModal() {
   renderConnectionModal();
   $('#restartWa').onclick = guard(async () => { await api('POST', '/api/wa/restart'); toast('Restarting connection…'); });
   $('#logoutWa').onclick = guard(async () => {
-    if (!await confirmBox('Unlink WhatsApp?', 'The bot will stop replying until you scan a new QR.', 'Unlink')) return;
-    const btn = $('#logoutWa'); btn.disabled = true; btn.textContent = 'Unlinking…';
-    const r = await api('POST', '/api/wa/logout');
+    if (!await confirmBox('Unlink WhatsApp?', 'The bot will stop replying until you scan a new QR.', 'Unlink')) return openConnectionModal();
+    // The confirm dialog replaced the connection window, so show a fresh "working" window instead of touching old buttons.
+    const busy = openModal(`<div class="modal-head"><h3>Unlinking…</h3></div>
+      <div class="modal-body"><p style="margin:0">Asking WhatsApp to remove this device from your phone. This can take up to 15 seconds.</p></div>`, { size: 'sm' });
+    let r;
+    try { r = await api('POST', '/api/wa/logout'); } finally { busy.close(); }
     if (r.confirmed) toast('Unlinked — also removed from Linked devices on your phone.');
     else await confirmBox('Unlinked here — please also remove it on your phone',
       `The bot is unlinked from this dashboard, but WhatsApp didn't confirm the removal (${esc(r.reason || 'no answer')}).<br><br>
