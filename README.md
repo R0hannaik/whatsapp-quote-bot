@@ -29,7 +29,7 @@ How the bot decides:
 Needs **Node.js 20+** on a machine that stays on (a small VPS or an always-on PC).
 
 ```bash
-cp .env.example .env        # set DASHBOARD_PASSWORD
+cp .env.example .env        # set DASHBOARD_PASSWORD and CONTACT_PHONE
 npm install
 npm start                   # → http://localhost:3000
 ```

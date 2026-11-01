@@ -88,7 +88,7 @@ CREATE INDEX IF NOT EXISTS idx_inq_created ON inquiries(created_at);
 /* ---------------- settings ---------------- */
 export const SETTING_DEFAULTS = {
   business_name: 'Pawan Chemicals',
-  contact_phone: '+91 90000 00000',
+  contact_phone: '',               // set CONTACT_PHONE in .env
   default_location: 'Bhiwandi / Mumbai Ex-Godown',
   default_gst: 18,
   cooldown_minutes: 3,           // same sender + same chemical in same group
@@ -110,10 +110,20 @@ export const SETTING_DEFAULTS = {
   ai_model: 'claude-haiku-5-5',
 };
 
+/** Settings that come from .env when present (kept out of the code and the database). */
+export const ENV_SETTINGS = { contact_phone: 'CONTACT_PHONE' };
+const fromEnv = key => {
+  const v = ENV_SETTINGS[key] && process.env[ENV_SETTINGS[key]];
+  return v && v.trim() ? v.trim() : undefined;
+};
+export const envLockedSettings = () => Object.keys(ENV_SETTINGS).filter(k => fromEnv(k) !== undefined);
+
 const getStmt = db.prepare('SELECT value FROM settings WHERE key = ?');
 const setStmt = db.prepare('INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
 
 export function getSetting(key) {
+  const env = fromEnv(key);
+  if (env !== undefined) return env;
   const row = getStmt.get(key);
   if (!row) return SETTING_DEFAULTS[key];
   try { return JSON.parse(row.value); } catch { return row.value; }
@@ -124,6 +134,7 @@ export function getSettings() {
   for (const { key, value } of db.prepare('SELECT key, value FROM settings').all()) {
     if (key in SETTING_DEFAULTS) { try { out[key] = JSON.parse(value); } catch { out[key] = value; } }
   }
+  for (const k of envLockedSettings()) out[k] = fromEnv(k);
   return out;
 }
 

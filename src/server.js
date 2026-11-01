@@ -207,11 +207,11 @@ app.post('/api/join/:jid/rotate', wrap(async (req, res) => res.json(await waMod.
 app.post('/api/join/token', (_req, res) => { db.setSetting('join_page_token', crypto.randomBytes(9).toString('base64url')); res.json({ token: db.getSetting('join_page_token') }); });
 
 /* settings */
-app.get('/api/settings', (_req, res) => res.json({ settings: db.getSettings(), aiKeyPresent: !!process.env.ANTHROPIC_API_KEY }));
+app.get('/api/settings', (_req, res) => res.json({ settings: db.getSettings(), envLocked: db.envLockedSettings(), aiKeyPresent: !!process.env.ANTHROPIC_API_KEY }));
 app.put('/api/settings', wrap((req, res) => {
   const body = req.body || {};
   for (const k of Object.keys(db.SETTING_DEFAULTS)) {
-    if (!(k in body) || k === 'join_page_token') continue;
+    if (!(k in body) || k === 'join_page_token' || db.envLockedSettings().includes(k)) continue;
     const def = db.SETTING_DEFAULTS[k];
     let v = body[k];
     if (typeof def === 'number') { v = Number(v); if (!Number.isFinite(v) || v < 0) throw new Error(`Invalid value for ${k}`); }

@@ -56,6 +56,7 @@ const out = render(DEFAULT_TEMPLATES.quote, vars);
 console.log('\n' + out + '\n');
 assert.match(out, /Requirement:\* 2 TON – Bhiwandi/);
 assert.match(out, /Phthalic Anhydride \(PA\)/);
+assert.match(out, /\+91 90000 00000/);
 const noQty = render(DEFAULT_TEMPLATES.quote, buildVars(chems[3], {}, {}));
 assert.doesNotMatch(noQty, /Requirement/);
 const korea = render('{rate_details}', buildVars(chems[0], A('Korea PA rate'), {}));

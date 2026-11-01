@@ -421,7 +421,7 @@ async function loadTemplates() {
             <select class="input" id="tplSample" style="max-width:300px"></select></div>
           <div class="phone"><div class="phone-head"><div class="av">${esc((state.settings?.business_name || 'P')[0])}</div><div><b>Chemical Traders Group</b><small>tap here for group info</small></div></div>
             <div class="phone-body">
-              <div class="bubble"><div class="who">Broker (Broker)</div><textarea class="bubble-input" id="tplMsg" rows="2" title="Edit this message to test what the bot understands"></textarea><div class="meta">11:42 AM</div></div>
+              <div class="bubble"><div class="who">Broker</div><textarea class="bubble-input" id="tplMsg" rows="2" title="Edit this message to test what the bot understands"></textarea><div class="meta">11:42 AM</div></div>
               <div id="tplReplies"></div>
             </div></div>
           <div class="analysis" id="tplAnalysis"></div>
@@ -660,14 +660,18 @@ async function loadJoin() {
 
 /* =========================================================== SETTINGS */
 async function loadSettings() {
-  const { settings: s, aiKeyPresent } = await api('GET', '/api/settings');
+  const { settings: s, envLocked = [], aiKeyPresent } = await api('GET', '/api/settings');
   state.settings = s;
   const num = (k, label, help = '') => `<div class="field"><label>${label}</label><input class="input" type="number" min="0" name="${k}" value="${esc(s[k])}">${help ? `<div class="help">${help}</div>` : ''}</div>`;
-  const txt = (k, label, help = '', ta = false) => `<div class="field"><label>${label}</label>${ta ? `<textarea class="input" rows="3" name="${k}">${esc(s[k])}</textarea>` : `<input class="input" name="${k}" value="${esc(s[k])}">`}${help ? `<div class="help">${help}</div>` : ''}</div>`;
+  const txt = (k, label, help = '', ta = false) => {
+    const locked = envLocked.includes(k);
+    const h = locked ? 'Set in your <code>.env</code> file — edit it there and restart the app.' : help;
+    return `<div class="field"><label>${label}</label>${ta ? `<textarea class="input" rows="3" name="${k}">${esc(s[k])}</textarea>` : `<input class="input" name="${k}" value="${esc(s[k])}" ${locked ? 'readonly disabled' : ''}>`}${h ? `<div class="help">${h}</div>` : ''}</div>`;
+  };
   const chk = (k, label) => `<label class="check" style="margin-bottom:14px"><input type="checkbox" name="${k}" ${s[k] ? 'checked' : ''}> ${label}</label>`;
   $('#view-settings').innerHTML = `<form id="setForm" class="settings-grid">
     <div class="card card-pad"><h3>Business details</h3>
-      ${txt('business_name', 'Business Name')}${txt('contact_phone', 'Contact Phone', 'Used in {contact_phone} in your templates.')}
+      ${txt('business_name', 'Business Name')}${txt('contact_phone', 'Contact Phone', 'Used in {contact_phone} in your templates. Tip: set CONTACT_PHONE in .env instead.')}
       ${txt('default_location', 'Default Dispatch Location')}${num('default_gst', 'Default GST %')}</div>
     <div class="card card-pad"><h3>Bot behaviour &amp; safety</h3>
       <div class="grid2">${num('cooldown_minutes', 'Cooldown (minutes)', 'Same person + same chemical in a group')}${num('group_max_replies_per_10min', 'Max replies / group / 10 min')}
@@ -699,7 +703,7 @@ async function loadSettings() {
   $('#setForm').onsubmit = guard(async e => {
     e.preventDefault();
     const f = e.target, body = {};
-    for (const k of Object.keys(s)) { const el = f.elements[k]; if (!el) continue; body[k] = el.type === 'checkbox' ? el.checked : el.value; }
+    for (const k of Object.keys(s)) { const el = f.elements[k]; if (!el || el.disabled) continue; body[k] = el.type === 'checkbox' ? el.checked : el.value; }
     const r = await api('PUT', '/api/settings', body); state.settings = r.settings; applyBrand(); toast('Settings saved');
   });
   $('#pwSave').onclick = guard(async () => {
