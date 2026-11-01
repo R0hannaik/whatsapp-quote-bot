@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Log in · Quote Bot</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/app.css">
+  <style>
+    body { min-height: 100vh; display: grid; place-items: center; background: var(--navy); padding: 16px; }
+    .login { width: 100%; max-width: 400px; background: #fff; border-radius: 22px; padding: 34px 32px; box-shadow: 0 30px 80px rgba(0,0,0,.35); }
+    .login h1 { font-size: 22px; margin: 16px 0 4px; letter-spacing: -.01em; }
+    .login p { margin: 0 0 24px; color: var(--muted); }
+    .err { color: var(--red); font-size: 14px; min-height: 20px; margin: -8px 0 10px; }
+  </style>
+</head>
+<body>
+  <form class="login" id="f">
+    <div class="brand-mark">🔒</div>
+    <h1>Quote Bot Dashboard</h1>
+    <p>Enter the dashboard password to continue.</p>
+    <div class="field"><label for="pw">Password</label><input class="input" type="password" id="pw" autocomplete="current-password" autofocus required></div>
+    <div class="err" id="err"></div>
+    <button class="btn btn-dark" style="width:100%" id="go">Log in</button>
+  </form>
+  <script>
+    document.getElementById('f').onsubmit = async e => {
+      e.preventDefault();
+      const btn = document.getElementById('go'), err = document.getElementById('err');
+      btn.disabled = true; err.textContent = '';
+      try {
+        const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: document.getElementById('pw').value }) });
+        const d = await r.json().catch(() => ({}));
+        if (r.ok) location.href = '/'; else err.textContent = d.error || 'Login failed';
+      } catch { err.textContent = 'Could not reach the server'; }
+      btn.disabled = false;
+    };
+  </script>
+</body>
+</html>

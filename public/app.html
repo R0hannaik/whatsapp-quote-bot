@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quote Bot Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="brand-mark" id="brandMark">P</div>
+        <div><span id="brandName">Quote Bot</span><small>WhatsApp Auto-Quotation Dashboard</small></div>
+      </div>
+      <div class="spacer"></div>
+      <button class="wa-pill" id="waPill" data-status="connecting"><span class="dot"></span><span id="waPillText">Connecting…</span></button>
+      <button class="ghost-dark" id="logoutBtn">Log out</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="connAlert" class="alert-bar hidden"></div>
+
+    <div class="tabs-row">
+      <nav class="tabs" id="tabs">
+        <button class="tab active" data-tab="chemicals">Chemicals &amp; Rates Matrix</button>
+        <button class="tab" data-tab="groups">WhatsApp Groups Monitor</button>
+        <button class="tab" data-tab="templates">WhatsApp Reply Templates</button>
+        <button class="tab" data-tab="orders">Orders &amp; Decisions <span class="count hidden" id="pendingCount"></span></button>
+        <button class="tab" data-tab="join">Group Join QR</button>
+        <button class="tab" data-tab="settings">Settings</button>
+      </nav>
+      <div class="tab-actions" id="tabActions"></div>
+    </div>
+
+    <section id="view-chemicals"></section>
+    <section id="view-groups" class="hidden"></section>
+    <section id="view-templates" class="hidden"></section>
+    <section id="view-orders" class="hidden"></section>
+    <section id="view-join" class="hidden"></section>
+    <section id="view-settings" class="hidden"></section>
+  </main>
+
+  <div id="modalRoot"></div>
+  <div class="toasts" id="toasts"></div>
+  <script type="module" src="/assets/app.js"></script>
+</body>
+</html>
