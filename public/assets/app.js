@@ -143,7 +143,13 @@ function openConnectionModal() {
   $('#restartWa').onclick = guard(async () => { await api('POST', '/api/wa/restart'); toast('Restarting connection…'); });
   $('#logoutWa').onclick = guard(async () => {
     if (!await confirmBox('Unlink WhatsApp?', 'The bot will stop replying until you scan a new QR.', 'Unlink')) return;
-    await api('POST', '/api/wa/logout'); toast('Unlinked. A new QR will appear shortly.'); openConnectionModal();
+    const btn = $('#logoutWa'); btn.disabled = true; btn.textContent = 'Unlinking…';
+    const r = await api('POST', '/api/wa/logout');
+    if (r.confirmed) toast('Unlinked — also removed from Linked devices on your phone.');
+    else await confirmBox('Unlinked here — please also remove it on your phone',
+      `The bot is unlinked from this dashboard, but WhatsApp didn't confirm the removal (${esc(r.reason || 'no answer')}).<br><br>
+      On the phone, open <b>WhatsApp → Settings → Linked devices</b>, tap the bot's device (it may say <b>Ubuntu</b> or <b>Quote Bot</b>) and choose <b>Log out</b>.`, 'OK', false);
+    openConnectionModal();
   });
 }
 function renderConnectionModal() {

@@ -1,6 +1,6 @@
 // WhatsApp connection (Baileys, multi-device "Linked devices"), group sync, auto-reply, rotating join links.
 import makeWASocket, {
-  useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers, normalizeMessageContent,
+  useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, normalizeMessageContent, S_WHATSAPP_NET,
   jidNormalizedUser, isJidGroup, areJidsSameUser,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
@@ -42,6 +42,7 @@ const cooldown = new Map();           // `${group}|${sender}|${chem}` -> ts
 const groupBurst = new Map();         // group -> [ts]
 let reconnectTimer = null;
 let retries = 0;
+let unlinking = false;   // set while we unlink on purpose, so the close handler doesn't also restart
 let sendChain = Promise.resolve();
 let lastSendError = '';
 
@@ -63,7 +64,8 @@ export async function startWhatsApp() {
     ...(version ? { version } : {}),
     auth: state,
     logger,
-    browser: Browsers.ubuntu('Chrome'),
+    // Name shown on the phone under Settings → Linked devices (applies to new links).
+    browser: [(process.env.WA_DEVICE_NAME || 'Quote Bot').slice(0, 30), 'Chrome', '1.0.0'],
     markOnlineOnConnect: false,
     syncFullHistory: false,
     generateHighQualityLinkPreview: false,
@@ -92,7 +94,7 @@ export async function startWhatsApp() {
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
       wa.lastError = lastDisconnect?.error?.message || String(code || 'closed');
-      if (wa.sock !== sock) return; // superseded by a newer socket
+      if (wa.sock !== sock || unlinking) return; // superseded by a newer socket, or logoutWhatsApp() is handling it
       if (code === DisconnectReason.loggedOut) {
         console.log('[wa] logged out — clearing session, a new QR will appear');
         wa.status = 'logged_out';
@@ -159,14 +161,53 @@ export async function syncGroups() {
   return live.length;
 }
 
+/**
+ * Unlink this number: ask WhatsApp to remove the linked device and WAIT for it to confirm
+ * (the library's own logout() closes the connection without waiting, so the request can be lost
+ * and the phone keeps showing the device). Returns { confirmed, reason }.
+ */
 export async function logoutWhatsApp() {
-  try { await wa.sock?.logout(); } catch { /* ignore */ }
-  fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-  wa.status = 'logged_out'; wa.me = null;
-  setCurrentAccount('');
-  groupMeta.clear();
+  unlinking = true;
   clearTimeout(reconnectTimer);
-  reconnectTimer = setTimeout(startWhatsApp, 1500);
+  let confirmed = false, reason = '';
+  try {
+    // If we're mid-reconnect, give the connection a few seconds to come back so the request can be sent.
+    for (let i = 0; i < 30 && wa.sock && wa.status === 'connecting'; i++) await sleep(500);
+    const sock = wa.sock;
+    const me = sock?.authState?.creds?.me?.id;
+    if (!sock || wa.status !== 'open' || !me) {
+      reason = 'WhatsApp was not connected, so the phone could not be told';
+    } else {
+      // WhatsApp usually answers by closing the connection with "logged out" — that counts as confirmed too.
+      const closedAsLoggedOut = new Promise(resolve => {
+        sock.ev.on('connection.update', u => {
+          if (u.connection === 'close' && u.lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut) resolve(true);
+        });
+      });
+      const ack = sock.query({
+        tag: 'iq', attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'md' },
+        content: [{ tag: 'remove-companion-device', attrs: { jid: me, reason: 'user_initiated' } }],
+      }, 15000).then(() => true);
+      try {
+        confirmed = await Promise.race([ack, closedAsLoggedOut, sleep(16000).then(() => { throw new Error('no answer from WhatsApp'); })]);
+      } catch (e) {
+        confirmed = await Promise.race([closedAsLoggedOut, sleep(1500).then(() => false)]);
+        if (!confirmed) reason = e.message || 'WhatsApp did not confirm';
+      }
+    }
+  } finally {
+    const old = wa.sock;
+    wa.sock = null;
+    try { old?.end(new Error('unlinked')); } catch { /* already closed */ }
+    fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+    wa.status = 'logged_out'; wa.me = null; wa.qr = null;
+    setCurrentAccount('');
+    groupMeta.clear();
+    unlinking = false;
+    console.log(confirmed ? '[wa] unlinked — WhatsApp confirmed the device was removed' : `[wa] unlinked locally, but ${reason}. Remove it on the phone: Settings → Linked devices.`);
+    reconnectTimer = setTimeout(startWhatsApp, 1500);   // show a fresh QR
+  }
+  return { confirmed, reason };
 }
 
 export async function restartWhatsApp() {

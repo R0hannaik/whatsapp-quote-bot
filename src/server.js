@@ -111,7 +111,7 @@ app.get('/api/status', (_req, res) => {
 });
 app.get('/api/activity', (_req, res) => res.json(waMod.activity.slice(0, 60)));
 app.post('/api/wa/restart', wrap(async (_req, res) => { await waMod.restartWhatsApp(); res.json({ ok: true }); }));
-app.post('/api/wa/logout', wrap(async (_req, res) => { await waMod.logoutWhatsApp(); res.json({ ok: true }); }));
+app.post('/api/wa/logout', wrap(async (_req, res) => res.json({ ok: true, ...(await waMod.logoutWhatsApp()) })));
 
 /* chemicals */
 app.get('/api/chemicals', (_req, res) => res.json(db.listChemicals()));
