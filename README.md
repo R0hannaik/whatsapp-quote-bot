@@ -10,7 +10,7 @@ your rates matrix — plus a password-protected dashboard to run it.
 |---|---|
 | **Chemicals & Rates Matrix** | Add / edit chemicals, aliases (PA, p.a., phthalic…), brand, packaging, single price or rates by origin (China, Korea…), stock status. *Edit Chemical* opens the **Edit Chemical Details & Price** modal. |
 | **WhatsApp Groups Monitor** | Every group the bot's number is in: name & ID, type, members, quotes sent, and an **auto-reply toggle** (all OFF by default). *Sync Live Groups*, *Turn All OFF*, *+ Add Custom Group* (by group ID, phone number, or invite link). |
-| **WhatsApp Reply Templates** | *Price Quotation* and *Deal & Negotiation* templates with presets, click-to-insert variables, bold/italic/mono toolbar and a live WhatsApp preview. Type any message in the preview bubble to see exactly what the bot would understand and reply. |
+| **WhatsApp Reply Templates** | *Price Quotation*, *Deal & Negotiation* and *Multi-Product* templates with presets, click-to-insert variables, bold/italic/mono toolbar and a live WhatsApp preview. Type any message in the preview bubble to see exactly what the bot would understand and reply. |
 | **Orders & Decisions** | Every enquiry the bot answered (and requests it couldn't match). **You** set the final status — Confirmed, Negotiating, On Hold, Rejected, Dispatched — with final rate, qty, private notes, history, and a box to reply in the group. CSV export. |
 | **Group Join QR** | A QR code that **changes every 10 minutes**: the bot revokes the group's invite link and creates a new one, so old screenshots stop working. Includes a public page (no login) you can show on a screen or website. |
 | **Settings** | Business name / phone, reply delays, cooldowns, negotiation & seller-post keywords, optional AI fallback, password change, WhatsApp unlink. |
@@ -22,6 +22,11 @@ How the bot decides:
 - Ignores seller posts ("available with us @ 104/kg"), greetings, long price lists, and backlog after a reconnect.
 - "last rate", "best price", "discount", "kam"… → **Deal & Negotiation** template (it never promises a lower price).
 - Asks for an origin ("Korea PA rate") → only that origin's rate is sent.
+- **Several products in one message** ("Need: 1. PA Korea 2 MT 2. MA China 5 MT 3. IPA 20 drums 4. DOP 1 tanker", or
+  "PA 2 MT, AA 10 MT & IPA 5 drums") → **one** combined quotation (up to 10 products). Each product gets its own quantity
+  and origin; "5 MT each" is shared; items not in your matrix are listed as *Will check & revert* and saved in
+  Orders → Unmatched. Every product gets its own row in Orders, linked as one enquiry. Settings can switch to one
+  message per product.
 - Cooldown per person + chemical, and a per-group cap, to keep the number safe.
 
 ## Run it

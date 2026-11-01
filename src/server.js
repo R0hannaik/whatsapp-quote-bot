@@ -8,7 +8,7 @@ const express = (await import('express')).default;
 const db = await import('./db.js');
 const { initPassword, changePassword, login, logout, logoutEverywhere, requireAuth, isAuthed } = await import('./auth.js');
 const { planReplies, describe, invalidateCatalogue } = await import('./bot.js');
-const { PRESETS, DEFAULT_TEMPLATES, TEMPLATE_VARIABLES } = await import('./presets.js');
+const { PRESETS, DEFAULT_TEMPLATES, TEMPLATE_VARIABLES, MULTI_VARIABLES } = await import('./presets.js');
 const waMod = await import('./whatsapp.js');
 const { wa } = waMod;
 
@@ -151,28 +151,37 @@ app.post('/api/groups/all-off', (_req, res) => { db.allAutoReplyOff(); res.json(
 app.delete('/api/groups/:jid', wrap((req, res) => { db.deleteGroup(req.params.jid); res.json({ ok: true }); }));
 
 /* templates */
-app.get('/api/templates', (_req, res) => res.json({ templates: db.getTemplates(), defaults: DEFAULT_TEMPLATES, presets: PRESETS, variables: TEMPLATE_VARIABLES }));
+app.get('/api/templates', (_req, res) => res.json({ templates: db.getTemplates(), defaults: DEFAULT_TEMPLATES, presets: PRESETS,
+  variables: TEMPLATE_VARIABLES, multiVariables: MULTI_VARIABLES }));
 app.put('/api/templates/:mode', wrap((req, res) => {
-  if (!['quote', 'deal'].includes(req.params.mode)) throw new Error('Unknown template');
+  if (!db.TEMPLATE_MODES.includes(req.params.mode)) throw new Error('Unknown template');
   if (!String(req.body?.body || '').trim()) throw new Error('Template cannot be empty');
   if (String(req.body.body).length > 5000) throw new Error('Template is too long (max 5000 characters)');
+  if (req.params.mode === 'multi' && !String(req.body.body).includes('{items}')) throw new Error('The Multi-Product template must contain {items}');
   db.saveTemplate(req.params.mode, String(req.body.body)); res.json({ ok: true });
 }));
-app.post('/api/templates/:mode/reset', (req, res) => { db.resetTemplate(req.params.mode); res.json({ ok: true, body: DEFAULT_TEMPLATES[req.params.mode] }); });
+app.post('/api/templates/:mode/reset', wrap((req, res) => {
+  if (!db.TEMPLATE_MODES.includes(req.params.mode)) throw new Error('Unknown template');
+  db.resetTemplate(req.params.mode); res.json({ ok: true, body: DEFAULT_TEMPLATES[req.params.mode] });
+}));
 
-// "Try a message": runs the real parser + template without sending anything.
+// "Try a message": runs the real parser + templates without sending anything.
+// overrides = unsaved editor text ({quote, deal, multi, multi_item}); forceMode shows that template even if the message wouldn't use it.
 app.post('/api/simulate', wrap(async (req, res) => {
-  const { message, mode, body, forceMode, useAi } = req.body || {};
-  if (String(body || '').length > 5000) throw new Error('Template is too long');
-  const plan = await planReplies(String(message || '').slice(0, 4000), { templateOverride: mode && body ? { mode, body } : null, senderName: 'Rakesh', useAi: !!useAi });
-  let replies = plan.replies;
-  // When previewing a template mode the message wouldn't trigger, render that mode anyway so the editor always shows something.
-  if (forceMode && body && plan.analysis.items.length && !replies.some(r => r.intent === forceMode)) {
-    const { buildVars, render } = await import('./quote.js');
-    replies = plan.analysis.items.slice(0, 1).map(it => ({ chem: it.chem, intent: forceMode,
-      text: render(body, buildVars(it.chem, { ...plan.analysis, alias: it.alias, quantity: it.quantity ?? plan.analysis.quantity }, db.getSettings(), { sender_name: 'Rakesh' })) }));
+  const { message, overrides = {}, forceMode, useAi } = req.body || {};
+  const ov = {};
+  for (const m of db.TEMPLATE_MODES) if (typeof overrides[m] === 'string') {
+    if (overrides[m].length > 5000) throw new Error('Template is too long');
+    ov[m] = overrides[m];
   }
-  res.json({ analysis: describe(plan.analysis), replies: replies.map(r => ({ chemical: r.chem.name, intent: r.intent, text: r.text })), unmatchedReply: plan.unmatchedReply });
+  const fm = ['quote', 'deal', 'multi'].includes(forceMode) ? forceMode : undefined;
+  const plan = await planReplies(String(message || '').slice(0, 4000), { overrides: ov, forceMode: fm, senderName: 'Rakesh', useAi: !!useAi });
+  res.json({
+    analysis: describe(plan.analysis),
+    replies: plan.replies.map(r => ({ kind: r.kind, intent: r.intent, text: r.text, chemicals: r.items.map(i => i.chem.name) })),
+    unavailable: plan.unavailable.map(u => ({ name: u.name, quantity: u.quantity?.text || null, reason: u.reason })),
+    unmatchedReply: plan.unmatchedReply,
+  });
 }));
 
 /* inquiries / orders */
@@ -217,6 +226,7 @@ app.put('/api/settings', wrap((req, res) => {
     if (typeof def === 'number') { v = Number(v); if (!Number.isFinite(v) || v < 0) throw new Error(`Invalid value for ${k}`); }
     if (typeof def === 'boolean') v = !!v;
     if (typeof def === 'string') { v = String(v); if (v.length > 2000) throw new Error(`${k} is too long`); }
+    if (k === 'multi_reply_style' && !['combined', 'separate'].includes(v)) throw new Error('multi_reply_style must be combined or separate');
     db.setSetting(k, v);
   }
   if (Number(db.getSetting('invite_rotate_minutes')) < 2) db.setSetting('invite_rotate_minutes', 2);

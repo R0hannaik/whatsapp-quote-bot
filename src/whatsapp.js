@@ -250,13 +250,15 @@ function cleanName(n) {
     .replace(/\s+/g, ' ').trim().slice(0, 40);
 }
 
-function allowedByRateLimit(group, sender, chemId, s) {
+/** keys = chemical ids in the reply. Blocked only if EVERY product was already quoted to this person recently. */
+function allowedByRateLimit(group, sender, keys, s) {
   const now = Date.now();
-  const key = `${group}|${sender}|${chemId}`;
-  if (now - (cooldown.get(key) || 0) < (Number(s.cooldown_minutes) || 0) * 60000) return false;
+  const cd = (Number(s.cooldown_minutes) || 0) * 60000;
+  const ks = (Array.isArray(keys) ? keys : [keys]).map(k => `${group}|${sender}|${k}`);
+  if (ks.every(k => now - (cooldown.get(k) || 0) < cd)) return false;
   const burst = (groupBurst.get(group) || []).filter(t => now - t < 10 * 60000);
   if (burst.length >= (Number(s.group_max_replies_per_10min) || 15)) return false;
-  cooldown.set(key, now);
+  ks.forEach(k => cooldown.set(k, now));
   burst.push(now); groupBurst.set(group, burst);
   return true;
 }
@@ -308,25 +310,40 @@ export async function handleMessage(msg) {
     quantity: a.quantity?.text || null, location: a.location, origin: a.origins.join(', ') || null,
   };
 
+  const batchKey = k.id || `${jid}-${Date.now()}`;
+  const batchSize = a.items.length + plan.unavailable.length;
+  const batch = batchSize > 1 ? { batch_key: batchKey, batch_size: batchSize } : {};
+  // Items we can't quote (not in the matrix / out of stock) still go to Orders so the owner can follow up.
+  const logUnavailable = () => plan.unavailable.forEach(u => createInquiry({
+    ...base, ...batch, quantity: u.quantity?.text || null, requested_text: u.name, intent: 'unmatched', status: 'Unmatched',
+    history_text: u.reason === 'out of stock' ? `Asked for ${u.name} — out of stock, not quoted` : `Asked for "${u.name}" — not in the rates matrix`,
+  }));
+
   if (!plan.replies.length) {
-    if (a.items.length === 0 && a.unmatchedWorthy) {
-      createInquiry({ ...base, intent: 'unmatched', status: 'Unmatched' });
-      if (plan.unmatchedReply && allowedByRateLimit(jid, sender.jid, 'unmatched', s)) await queueSend(jid, plan.unmatchedReply, msg, s);
-    }
-    return log('unmatched', a.items.length ? 'chemical is out of stock / paused' : 'no chemical from your matrix found — add it or its alias, and it is listed in Orders → Unmatched');
+    if (plan.unavailable.length) logUnavailable();
+    else if (a.items.length === 0 && a.unmatchedWorthy) createInquiry({ ...base, intent: 'unmatched', status: 'Unmatched' });
+    if ((plan.unavailable.length || a.unmatchedWorthy) && plan.unmatchedReply && allowedByRateLimit(jid, sender.jid, 'unmatched', s)) await queueSend(jid, plan.unmatchedReply, msg, s);
+    return log('unmatched', plan.unavailable.length ? `not in your matrix: ${plan.unavailable.map(u => u.name).join(', ')} — listed in Orders → Unmatched`
+      : a.items.length ? 'chemical is out of stock / paused' : 'no chemical from your matrix found — add it or its alias, and it is listed in Orders → Unmatched');
   }
 
+  let anySent = false;
   for (const r of plan.replies) {
-    if (!allowedByRateLimit(jid, sender.jid, r.chem.id, s)) { log('skipped', `${r.chem.name}: cooldown — same person asked within ${s.cooldown_minutes} min (or group limit reached)`); continue; }
+    const names = r.items.map(i => i.chem.name).join(', ');
+    if (!allowedByRateLimit(jid, sender.jid, r.items.map(i => i.chem.id), s)) { log('skipped', `${names}: cooldown — same person asked within ${s.cooldown_minutes} min (or group limit reached)`); continue; }
     const sent = await queueSend(jid, r.text, msg, s);
-    if (!sent) { log('error', `${r.chem.name}: sending failed — ${lastSendError}`); continue; }
-    log('replied', `${r.chem.name} (${r.intent === 'deal' ? 'Deal template' : 'Price Quotation'})`);
+    if (!sent) { log('error', `${names}: sending failed — ${lastSendError}`); continue; }
+    anySent = true;
+    const how = r.kind === 'multi' ? `Multi-Product, ${r.items.length} products` : r.intent === 'deal' ? 'Deal template' : 'Price Quotation';
+    log('replied', r.kind === 'multi' ? `${r.items.length} products in one message (${names})${plan.unavailable.length ? ` + ${plan.unavailable.length} to check` : ''}` : `${names} (${how})`);
     incrementQuotes(jid);
-    createInquiry({
-      ...base, quantity: r.quantity?.text || base.quantity, chemical_id: r.chem.id, chemical_name: r.chem.name, intent: r.intent, quote_text: r.text,
-      quoted_rate: r.quotedRate, status: r.intent === 'deal' ? 'Negotiating' : 'Quoted',
+    for (const it of r.items) createInquiry({
+      ...base, ...batch, quantity: it.quantity?.text || null, chemical_id: it.chem.id, chemical_name: it.chem.name, intent: r.intent,
+      quote_text: r.text, quoted_rate: it.quotedRate, status: r.intent === 'deal' ? 'Negotiating' : 'Quoted',
+      history_text: `Auto-quote sent (${how})`,
     });
   }
+  if (anySent) logUnavailable();
 }
 
 /** Sends are serialised with a human-like delay and "typing…" indicator to keep the number safe. */

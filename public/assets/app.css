@@ -160,6 +160,9 @@ table.data tr:hover td { background: #fcfcfd; }
 .editor-bar button:hover { background: #e9edf2; }
 .editor-bar .sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; }
 .editor-bar .chars { margin-left: auto; font-family: var(--mono); font-size: 13px; color: var(--faint); }
+.editor + .editor { margin-top: 16px; }
+.editor-label { padding: 10px 16px 0; font-size: 12.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--soft); }
+.editor[data-editor="multi_item"] textarea { min-height: 200px; }
 .editor textarea { display: block; width: 100%; min-height: 400px; border: 0; outline: none; resize: vertical; padding: 18px 20px; font-family: var(--mono); font-size: 15px; line-height: 1.75; }
 .tip { margin-top: 20px; background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; color: var(--ink-2); font-size: 14.5px; }
 .tip code { font-family: var(--mono); background: #fff; border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; }
@@ -273,3 +276,5 @@ table.data tr:hover td { background: #fcfcfd; }
   .modal-body, .modal-head, .modal-foot { padding-left: 18px; padding-right: 18px; }
   .origin-row { grid-template-columns: 1fr 1fr; }
 }
+
+.batch-link { font-size: 13px; margin-top: 4px; display: inline-block; }

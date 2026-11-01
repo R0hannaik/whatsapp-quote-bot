@@ -404,32 +404,38 @@ function openAddGroupModal() {
 }
 
 /* =========================================================== TEMPLATES */
+const TPL_MODES = ['quote', 'deal', 'multi', 'multi_item'];
+const EDITOR_LABEL = { multi: 'Message (wraps the product list)', multi_item: 'Product block — repeated for every product' };
+const WRAPPER_VARS = ['business_name', 'contact_phone', 'sender_name', 'date', 'customer_location'];
+const editorHtml = (target, label) => `<div class="editor" data-editor="${target}">
+  ${label ? `<div class="editor-label">${label}</div>` : ''}
+  <div class="editor-bar"><button data-wrap="*" title="Bold"><b>B</b></button><button data-wrap="_" title="Italic"><i>I</i></button><button data-wrap="~" title="Strikethrough"><s>S</s></button>
+    <button data-wrap="\`\`\`" class="mono" title="Monospace">mono</button><span class="sep"></span><button data-divider>— Divider</button><span class="chars"></span></div>
+  <textarea spellcheck="false" data-target="${target}"></textarea></div>`;
+// which textareas belong to a mode (Multi-Product has two)
+const targetsOf = mode => mode === 'multi' ? ['multi', 'multi_item'] : [mode];
+
 async function loadTemplates() {
   if (!state.chemicals.length) state.chemicals = await api('GET', '/api/chemicals');
   const data = await api('GET', '/api/templates');
   state.tpl = data;
-  for (const k of ['quote', 'deal']) if (state.tplDraft[k] === undefined) state.tplDraft[k] = data.templates[k];
+  for (const k of TPL_MODES) if (state.tplDraft[k] === undefined) state.tplDraft[k] = data.templates[k];
   if (!state.sampleChem && state.chemicals.length) state.sampleChem = (state.chemicals.find(c => c.origin_rates.length > 1) || state.chemicals[0]).id;
   const v = $('#view-templates');
   if (!v.dataset.ready) {
     v.innerHTML = `<div class="card">
       <div class="tpl-top"><span class="label-caps">Template Mode:</span>
-        <div class="seg" id="tplMode"><button data-mode="quote" class="active">📦 Price Quotation</button><button data-mode="deal">🤝 Deal &amp; Negotiation</button></div>
+        <div class="seg" id="tplMode"><button data-mode="quote" class="active">📦 Price Quotation</button><button data-mode="deal">🤝 Deal &amp; Negotiation</button><button data-mode="multi">🧾 Multi-Product</button></div>
         <div class="spacer"></div>
         <button class="btn btn-amber" id="tplSave">${ICON.save} Save Template</button><button class="btn btn-light" id="tplReset">Reset Default</button></div>
       <div class="tpl-grid">
         <div class="tpl-left">
           <div class="sec-head"><span class="label-caps">Quick Presets</span><span class="hint">Click to apply formatting</span></div>
           <div class="chips" id="tplPresets" style="gap:10px"></div>
-          <div class="sec-head" style="margin-top:26px"><span class="label-caps">Dynamic Variables (click to insert)</span><span class="hint">Substituted live per chemical</span></div>
+          <div class="sec-head" style="margin-top:26px"><span class="label-caps">Dynamic Variables (click to insert)</span><span class="hint" id="tplVarsHint">Substituted live per chemical</span></div>
           <div class="chips" id="tplVars" style="gap:8px"></div>
-          <div class="editor">
-            <div class="editor-bar"><button data-wrap="*" title="Bold"><b>B</b></button><button data-wrap="_" title="Italic"><i>I</i></button><button data-wrap="~" title="Strikethrough"><s>S</s></button>
-              <button data-wrap="\`\`\`" class="mono" title="Monospace">mono</button><span class="sep"></span><button data-divider>— Divider</button><span class="chars" id="tplChars"></span></div>
-            <textarea id="tplText" spellcheck="false"></textarea>
-          </div>
-          <div class="tip">💡 <b>Formatting Tip:</b> Use <code>*bold*</code> for product/rates and <code>_italic_</code> for notes. Any line whose variable is empty is hidden automatically — so when <code>{requirement}</code> is in your template and the customer doesn’t mention a quantity, that line simply disappears.
-          <br><br><b>When is each mode used?</b> The bot sends <b>Price Quotation</b> for normal enquiries and <b>Deal &amp; Negotiation</b> when the message contains negotiation words like <i>last rate, best price, discount, target, kam</i> (edit the list in Settings).</div>
+          <div id="tplEditors"></div>
+          <div class="tip" id="tplTip"></div>
         </div>
         <div class="tpl-right">
           <div class="sec-head" style="align-items:center"><span class="label-caps" style="color:var(--green-ink)">● WhatsApp Live Preview</span>
@@ -445,75 +451,118 @@ async function loadTemplates() {
       </div></div>`;
     v.dataset.ready = 1;
     $('#tplMode').onclick = e => { const b = e.target.closest('button'); if (b) setTplMode(b.dataset.mode); };
-    $('#tplText').oninput = e => { state.tplDraft[state.tplMode] = e.target.value; state.tplPreset[state.tplMode] = null; renderTplMeta(); preview(); };
+    const eds = $('#tplEditors');
+    eds.addEventListener('input', e => {
+      const t = e.target.closest('textarea[data-target]'); if (!t) return;
+      state.tplDraft[t.dataset.target] = t.value; state.tplPreset[state.tplMode] = null;
+      $$('#tplPresets .preset').forEach(b => b.classList.remove('active'));
+      renderTplMeta(); preview();
+    });
+    eds.addEventListener('focusin', e => { const t = e.target.closest('textarea[data-target]'); if (t && t.dataset.target !== state.tplFocus) { state.tplFocus = t.dataset.target; renderTplVars(); } });
+    eds.addEventListener('click', e => {
+      const ed = e.target.closest('[data-editor]'); if (!ed) return;
+      const w = e.target.closest('[data-wrap]')?.dataset.wrap;
+      if (w) { state.tplFocus = ed.dataset.editor; wrapSelection(w); }
+      if (e.target.closest('[data-divider]')) { state.tplFocus = ed.dataset.editor; insertAtCursor('\n━━━━━━━━━━━━━━━━\n'); }
+    });
     $('#tplPresets').onclick = e => {
       const b = e.target.closest('[data-preset]'); if (!b) return;
       const p = state.tpl.presets[state.tplMode].find(x => x.id === b.dataset.preset);
-      state.tplDraft[state.tplMode] = p.body; state.tplPreset[state.tplMode] = p.id; renderTplEditor();
+      state.tplDraft[state.tplMode] = p.body;
+      if (state.tplMode === 'multi') state.tplDraft.multi_item = p.item;
+      state.tplPreset[state.tplMode] = p.id; renderTplEditor();
     };
     $('#tplVars').onclick = e => { const b = e.target.closest('[data-var]'); if (b) insertAtCursor(`{${b.dataset.var}}`); };
-    $('.editor-bar').onclick = e => {
-      const w = e.target.closest('[data-wrap]')?.dataset.wrap;
-      if (w) wrapSelection(w);
-      if (e.target.closest('[data-divider]')) insertAtCursor('\n━━━━━━━━━━━━━━━━\n');
-    };
     $('#tplSample').onchange = e => { state.sampleChem = Number(e.target.value); setSampleMessage(); };
     $('#tplMsg').oninput = e => { state.sampleMsg = e.target.value; preview(); };
     $('#tplSave').onclick = guard(async () => {
-      await api('PUT', `/api/templates/${state.tplMode}`, { body: state.tplDraft[state.tplMode] });
-      state.tpl.templates[state.tplMode] = state.tplDraft[state.tplMode]; renderTplMeta(); toast('Template saved — the bot uses it from the next message');
+      const dirty = targetsOf(state.tplMode).filter(t => state.tplDraft[t] !== state.tpl.templates[t]);
+      if (!dirty.length) return toast('No changes to save');
+      for (const t of dirty) { await api('PUT', `/api/templates/${t}`, { body: state.tplDraft[t] }); state.tpl.templates[t] = state.tplDraft[t]; }
+      renderTplMeta(); toast('Template saved — the bot uses it from the next message');
     });
     $('#tplReset').onclick = guard(async () => {
       if (!await confirmBox('Reset to default?', 'Your saved template for this mode will be replaced with the default.', 'Reset')) return;
-      const r = await api('POST', `/api/templates/${state.tplMode}/reset`);
-      state.tpl.templates[state.tplMode] = r.body; state.tplDraft[state.tplMode] = r.body; renderTplEditor(); toast('Template reset to default');
+      for (const t of targetsOf(state.tplMode)) {
+        const r = await api('POST', `/api/templates/${t}/reset`);
+        state.tpl.templates[t] = r.body; state.tplDraft[t] = r.body;
+      }
+      state.tplPreset[state.tplMode] = null; renderTplEditor(); toast('Template reset to default');
     });
   }
   $('#tplSample').innerHTML = state.chemicals.map(c => `<option value="${c.id}" ${c.id === state.sampleChem ? 'selected' : ''}>Sample: ${esc(c.name)}${c.alias_list[0] ? ` (${esc(c.alias_list[0].toUpperCase())})` : ''}</option>`).join('');
-  $('#tplVars').innerHTML = state.tpl.variables.map(x => `<button class="var-chip" data-var="${x.key}" title="${esc(x.hint)}">+ {${x.key}}</button>`).join('');
-  if (!state.sampleMsg) setSampleMessage(); else $('#tplMsg').value = state.sampleMsg;
-  setTplMode(state.tplMode);
+  setTplMode(state.tplMode, !!state.sampleMsg);
 }
-function setTplMode(mode) {
+function setTplMode(mode, keepMessage = false) {
   state.tplMode = mode;
+  state.tplFocus = targetsOf(mode)[0];
   $$('#tplMode button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
   $('#tplPresets').innerHTML = state.tpl.presets[mode].map(p => `<button class="preset ${state.tplPreset[mode] === p.id ? 'active' : ''}" data-preset="${p.id}">${esc(p.label)}</button>`).join('');
-  setSampleMessage();
+  $('#tplEditors').innerHTML = mode === 'multi' ? editorHtml('multi', EDITOR_LABEL.multi) + editorHtml('multi_item', EDITOR_LABEL.multi_item) : editorHtml(mode);
+  $('#tplTip').innerHTML = mode === 'multi'
+    ? `💡 <b>How multi-product replies work:</b> when one message asks for 2 or more products (e.g. <i>“PA 2 MT, MA China 5 MT, IPA 20 drums”</i>), the bot sends <b>one</b> message. The <b>Product block</b> is filled in for every product with its own quantity and origin, and all blocks go where you put <code>{items}</code>.
+       <code>{unavailable}</code> lists anything not in your matrix as “Will check &amp; revert”, and <code>{deal_note}</code> appears only when the buyer is negotiating. Lines with an empty variable are hidden. Prefer one message per product? Change it in Settings.`
+    : `💡 <b>Formatting Tip:</b> Use <code>*bold*</code> for product/rates and <code>_italic_</code> for notes. Any line whose variable is empty is hidden automatically — so when <code>{requirement}</code> is in your template and the customer doesn’t mention a quantity, that line simply disappears.
+       <br><br><b>When is each mode used?</b> The bot sends <b>Price Quotation</b> for normal single-product enquiries and <b>Deal &amp; Negotiation</b> when the message contains negotiation words like <i>last rate, best price, discount, target, kam</i> (edit the list in Settings). Enquiries for several products use <b>Multi-Product</b>.`;
+  if (!keepMessage) setSampleMessage(); else $('#tplMsg').value = state.sampleMsg;
+  renderTplVars();
   renderTplEditor();
 }
+function renderTplVars() {
+  const f = state.tplFocus;
+  let vars;
+  if (f === 'multi') vars = [...state.tpl.multiVariables.filter(x => x.for === 'multi'), ...state.tpl.variables.filter(x => WRAPPER_VARS.includes(x.key))];
+  else if (f === 'multi_item') vars = [...state.tpl.multiVariables.filter(x => x.for === 'multi_item'), ...state.tpl.variables];
+  else vars = state.tpl.variables;
+  $('#tplVars').innerHTML = vars.map(x => `<button class="var-chip" data-var="${x.key}" title="${esc(x.hint)}">+ {${x.key}}</button>`).join('');
+  $('#tplVarsHint').textContent = f === 'multi' ? 'For the message around the list' : f === 'multi_item' ? 'For each product block' : 'Substituted live per chemical';
+}
 function setSampleMessage() {
+  const codeOf = c => (c.alias_list.find(a => a.replace(/\./g, '').length <= 4) || c.name).replace(/\./g, '').toUpperCase();
   const c = state.chemicals.find(x => x.id === state.sampleChem);
   if (!c) return;
-  const code = (c.alias_list.find(a => a.replace(/\./g, '').length <= 4) || c.name).replace(/\./g, '').toUpperCase();
-  state.sampleMsg = state.tplMode === 'deal' ? `${code} last rate kya hai? 10 ton Vapi` : `${code} 2 ton Bhiwandi rate urgent chahiye`;
+  const code = codeOf(c);
+  if (state.tplMode === 'multi') {
+    const others = state.chemicals.filter(x => x.id !== c.id).slice(0, 2);
+    const origin = c.origin_rates[0]?.country ? ` ${c.origin_rates[0].country}` : '';
+    state.sampleMsg = [`Need rates Bhiwandi:`, `1. ${code}${origin} 2 MT`, ...others.map((o, k) => `${k + 2}. ${codeOf(o)} ${k ? '20 drums' : '5 MT'}`), `${others.length + 2}. DOP 1 tanker`].join('\n');
+  } else {
+    state.sampleMsg = state.tplMode === 'deal' ? `${code} last rate kya hai? 10 ton Vapi` : `${code} 2 ton Bhiwandi rate urgent chahiye`;
+  }
   $('#tplMsg').value = state.sampleMsg;
+  $('#tplMsg').rows = Math.min(7, state.sampleMsg.split('\n').length + 1);
   preview();
 }
 function renderTplEditor() {
-  $('#tplText').value = state.tplDraft[state.tplMode];
+  for (const t of targetsOf(state.tplMode)) { const ta = $(`#tplEditors textarea[data-target="${t}"]`); if (ta) ta.value = state.tplDraft[t]; }
   $$('#tplPresets .preset').forEach(b => b.classList.toggle('active', state.tplPreset[state.tplMode] === b.dataset.preset));
   renderTplMeta(); preview();
 }
 function renderTplMeta() {
-  const d = state.tplDraft[state.tplMode];
-  const dirty = d !== state.tpl.templates[state.tplMode];
-  $('#tplChars').textContent = `${d.length} chars`;
+  let dirty = false;
+  for (const t of targetsOf(state.tplMode)) {
+    const d = state.tplDraft[t] ?? '';
+    if (d !== state.tpl.templates[t]) dirty = true;
+    const ch = $(`#tplEditors [data-editor="${t}"] .chars`); if (ch) ch.textContent = `${d.length} chars`;
+  }
   $('#tplSave').innerHTML = `${ICON.save} Save Template${dirty ? '<span class="dirty-dot" title="Unsaved changes"></span>' : ''}`;
 }
+const activeTextarea = () => $(`#tplEditors textarea[data-target="${state.tplFocus}"]`) || $('#tplEditors textarea');
 function insertAtCursor(text) {
-  const ta = $('#tplText'); const { selectionStart: s, selectionEnd: e, value } = ta;
+  const ta = activeTextarea(); const { selectionStart: s, selectionEnd: e, value } = ta;
   ta.value = value.slice(0, s) + text + value.slice(e); ta.focus(); ta.selectionStart = ta.selectionEnd = s + text.length;
-  ta.dispatchEvent(new Event('input'));
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
 }
 function wrapSelection(mark) {
-  const ta = $('#tplText'); const { selectionStart: s, selectionEnd: e, value } = ta;
+  const ta = activeTextarea(); const { selectionStart: s, selectionEnd: e, value } = ta;
   const sel = value.slice(s, e) || 'text';
   ta.value = value.slice(0, s) + mark + sel + mark + value.slice(e); ta.focus();
   ta.selectionStart = s + mark.length; ta.selectionEnd = s + mark.length + sel.length;
-  ta.dispatchEvent(new Event('input'));
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
 }
 const preview = debounce(guard(async () => {
-  const r = await api('POST', '/api/simulate', { message: state.sampleMsg, mode: state.tplMode, body: state.tplDraft[state.tplMode], forceMode: state.tplMode });
+  const overrides = Object.fromEntries(TPL_MODES.map(m => [m, state.tplDraft[m]]).filter(([, v]) => typeof v === 'string'));
+  const r = await api('POST', '/api/simulate', { message: state.sampleMsg, overrides, forceMode: state.tplMode });
   const now = new Date().toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
   const a = r.analysis;
   $('#tplReplies').innerHTML = r.replies.length
@@ -521,17 +570,20 @@ const preview = debounce(guard(async () => {
     : r.unmatchedReply ? `<div class="bubble out">${waFormat(r.unmatchedReply)}<div class="meta">${now} <span class="ticks">✓✓</span></div></div>`
     : `<div class="skip-note">🤫 The bot would <b>not reply</b> to this message${a.skipReason ? ` — ${esc(a.skipReason)}` : a.isRequest ? ' — no chemical from your matrix was recognised' : ''}.</div>`;
   const chips = [];
-  a.chemicals.forEach(c => chips.push(`<span class="badge b-green">🧪 ${esc(c.name)}${c.how !== 'exact' ? ` · ${c.how}` : ''}</span>`));
-  if (a.quantity) chips.push(`<span class="badge b-blue">⚖️ ${esc(a.quantity)}</span>`);
+  a.chemicals.forEach(c => chips.push(`<span class="badge b-green">🧪 ${esc(c.name)}${c.quantity ? ` · ${esc(c.quantity)}` : ''}${c.origins.length ? ` · ${esc(c.origins.join('/'))}` : ''}${c.how !== 'exact' ? ` · ${c.how}` : ''}</span>`));
+  (a.unmatchedItems || []).forEach(u => chips.push(`<span class="badge b-red" title="Not in your rates matrix">❓ ${esc(u.name)}${u.quantity ? ` · ${esc(u.quantity)}` : ''}</span>`));
   if (a.location) chips.push(`<span class="badge b-violet">📍 ${esc(a.location)}</span>`);
-  a.origins.forEach(o => chips.push(`<span class="badge b-gray">🌐 ${esc(o)}</span>`));
-  if (a.isRequest) chips.push(`<span class="badge ${a.intent === 'deal' ? 'b-amber' : 'b-gray'}">${a.intent === 'deal' ? '🤝 Negotiation → Deal template' : '📦 Enquiry → Price Quotation'}</span>`);
+  if (a.isRequest) {
+    const multi = r.replies.some(x => x.kind === 'multi');
+    chips.push(`<span class="badge ${a.intent === 'deal' ? 'b-amber' : 'b-gray'}">${multi ? `🧾 ${r.replies[0].chemicals.length} products → one message` : a.intent === 'deal' ? '🤝 Negotiation → Deal template' : '📦 Enquiry → Price Quotation'}</span>`);
+    if (multi && a.intent === 'deal') chips.push('<span class="badge b-amber">🤝 negotiating → deal note shown</span>');
+  }
   $('#tplAnalysis').innerHTML = chips.length ? `<span class="faint" style="font-size:13.5px;align-self:center">Bot understood:</span>${chips.join('')}` : '';
 }), 220);
 
 /* =========================================================== ORDERS & DECISIONS */
 async function loadOrders() {
-  const qs = new URLSearchParams({ status: state.orderFilter.status, q: state.orderFilter.q });
+  const qs = new URLSearchParams({ status: state.orderFilter.status, q: state.orderFilter.q, ...(state.orderFilter.batch ? { batch: state.orderFilter.batch } : {}) });
   state.orders = await api('GET', `/api/inquiries?${qs}`);
   const v = $('#view-orders');
   if (!v.dataset.ready) {
@@ -543,13 +595,20 @@ async function loadOrders() {
         <div class="table-wrap"><table class="data"><thead><tr><th>Received</th><th>Group &amp; Sender</th><th>Message</th><th>Chemical / Qty</th><th>Quoted</th><th>Decision</th><th></th></tr></thead>
         <tbody id="ordRows"></tbody></table></div></div>`;
     v.dataset.ready = 1;
-    $('#ordPills').onclick = e => { const b = e.target.closest('[data-st]'); if (b) { state.orderFilter.status = b.dataset.st; loadOrders(); } };
+    $('#ordPills').onclick = e => {
+      if (e.target.closest('[data-clear-batch]')) { delete state.orderFilter.batch; state.orderFilter.status = 'open'; return loadOrders(); }
+      const b = e.target.closest('[data-st]'); if (b) { state.orderFilter.status = b.dataset.st; delete state.orderFilter.batch; loadOrders(); }
+    };
     $('#ordSearch').oninput = debounce(e => { state.orderFilter.q = e.target.value; loadOrders(); }, 300);
     $('#ordRows').addEventListener('change', guard(async e => {
       const sel = e.target.closest('select[data-status]'); if (!sel) return;
       await api('PATCH', `/api/inquiries/${sel.dataset.status}`, { status: sel.value }); toast(`Marked as ${sel.value}`); loadOrders(); pollStatus();
     }));
-    $('#ordRows').addEventListener('click', e => { const id = e.target.closest('[data-open]')?.dataset.open; if (id) openOrderModal(Number(id)); });
+    $('#ordRows').addEventListener('click', e => {
+      const id = e.target.closest('[data-open]')?.dataset.open; if (id) openOrderModal(Number(id));
+      const b = e.target.closest('[data-batch]')?.dataset.batch;
+      if (b) { state.orderFilter = { status: 'all', q: '', batch: b }; $('#ordSearch').value = ''; loadOrders(); }
+    });
   }
   const s = state.orders.stats;
   $('#ordStats').innerHTML = [
@@ -557,13 +616,16 @@ async function loadOrders() {
     ['Confirmed (30 days)', s.confirmed], ['Unmatched requests', s.unmatched],
   ].map(([k, v, c]) => `<div class="stat ${c || ''}"><div class="k">${k}</div><div class="v">${v ?? 0}</div></div>`).join('');
   const pills = [['open', 'Open'], ['all', 'All'], ...state.orders.statuses.map(x => [x, x])];
-  $('#ordPills').innerHTML = pills.map(([k, l]) => `<button class="spill ${state.orderFilter.status === k ? 'active' : ''}" data-st="${esc(k)}">${esc(l)}</button>`).join('');
+  $('#ordPills').innerHTML = state.orderFilter.batch
+    ? `<span class="spill active">🧾 Showing one multi-product enquiry</span><button class="spill" data-clear-batch>✕ Back to all</button>`
+    : pills.map(([k, l]) => `<button class="spill ${state.orderFilter.status === k ? 'active' : ''}" data-st="${esc(k)}">${esc(l)}</button>`).join('');
   const items = state.orders.items;
   $('#ordRows').innerHTML = items.length ? items.map(i => `<tr>
     <td style="white-space:nowrap">${fmtTime(i.created_at)}</td>
     <td><div style="font-weight:600">${esc(i.group_name || '—')}</div><div class="sub">${esc(i.sender_name || '')} ${i.sender_phone ? `· ${esc(i.sender_phone)}` : ''}</div></td>
     <td class="msg-cell"><div class="txt">${esc(i.message)}</div></td>
-    <td>${i.chemical_name ? `<div style="font-weight:600">${esc(i.chemical_name)}</div>` : '<span class="badge b-gray">Not in matrix</span>'}<div class="sub">${esc([i.quantity, i.location, i.origin].filter(Boolean).join(' · '))}</div></td>
+    <td>${i.chemical_name ? `<div style="font-weight:600">${esc(i.chemical_name)}</div>` : `<span class="badge b-gray">Not in matrix</span>${i.requested_text ? ` <b>${esc(i.requested_text)}</b>` : ''}`}<div class="sub">${esc([i.quantity, i.location, i.origin].filter(Boolean).join(' · '))}</div>
+      ${i.batch_size > 1 ? `<button class="link-btn batch-link" data-batch="${esc(i.batch_key)}" title="Show all products from this message">🧾 ${i.batch_size}-product enquiry</button>` : ''}</td>
     <td style="max-width:220px"><div class="sub" style="color:var(--ink-2)">${esc(i.quoted_rate || '—')}</div>${i.final_rate ? `<div class="stock-note">Final: ${esc(i.final_rate)}</div>` : ''}</td>
     <td><select class="input status-select badge ${ORDER_CLASS[i.status] || 'b-gray'}" data-status="${i.id}">${state.orders.statuses.map(s => `<option ${s === i.status ? 'selected' : ''}>${s}</option>`).join('')}</select></td>
     <td><button class="btn btn-light btn-sm" data-open="${i.id}">Open</button></td></tr>`).join('')
@@ -577,7 +639,7 @@ function openOrderModal(id) {
     ['📞 Call me', () => `Thanks for the enquiry 🙏 Please call ${state.settings?.contact_phone || 'us'} to finalise the best rate.`],
     ['❌ Regret', () => `Sorry, we can't offer at this rate right now. We'll update you if anything changes. 🙏`],
   ];
-  const m = openModal(`<div class="modal-head"><h3>Enquiry #${i.id} · ${esc(i.chemical_name || 'Unmatched request')}</h3><button class="x" data-close>×</button></div>
+  const m = openModal(`<div class="modal-head"><h3>Enquiry #${i.id} · ${esc(i.chemical_name || (i.requested_text ? `${i.requested_text} (not in matrix)` : 'Unmatched request'))}</h3><button class="x" data-close>×</button></div>
     <div class="modal-body">
       <div class="grid2">
         <div>
@@ -691,8 +753,12 @@ async function loadSettings() {
     <div class="card card-pad"><h3>Bot behaviour &amp; safety</h3>
       <div class="grid2">${num('cooldown_minutes', 'Cooldown (minutes)', 'Same person + same chemical in a group')}${num('group_max_replies_per_10min', 'Max replies / group / 10 min')}
       ${num('reply_delay_min_sec', 'Reply delay min (sec)')}${num('reply_delay_max_sec', 'Reply delay max (sec)')}
-      ${num('max_chemicals_per_message', 'Max chemicals per message')}${num('max_message_length', 'Ignore messages longer than', 'Long posts are usually price lists')}</div>
+      ${num('max_products_per_message', 'Max products quoted per message')}${num('max_message_length', 'Ignore messages longer than', 'Long posts are usually price lists')}</div>
       ${num('invite_rotate_minutes', 'Join QR rotation (minutes)', 'Minimum 2. Default 10.')}
+      <div class="field"><label>Multi-product enquiries</label><select class="input" name="multi_reply_style">
+        <option value="combined" ${s.multi_reply_style !== 'separate' ? 'selected' : ''}>One combined message for all products (recommended)</option>
+        <option value="separate" ${s.multi_reply_style === 'separate' ? 'selected' : ''}>A separate message per product</option></select>
+        <div class="help">E.g. “PA 2 MT, MA 5 MT, IPA 20 drums”. Edit the combined layout in Reply Templates → Multi-Product.</div></div>
       ${chk('reply_to_own_messages', '<b>Test mode:</b> also reply to messages typed on the bot’s own phone')}
       <div class="help" style="margin:-8px 0 14px">Normally the bot ignores its own number. Turn this on only while testing from the linked phone, then switch it off.</div>
       ${chk('quote_out_of_stock', 'Still quote chemicals marked “Out of Stock”')}

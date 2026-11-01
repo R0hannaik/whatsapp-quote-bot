@@ -85,6 +85,14 @@ CREATE INDEX IF NOT EXISTS idx_inq_status ON inquiries(status);
 CREATE INDEX IF NOT EXISTS idx_inq_created ON inquiries(created_at);
 `);
 
+// Columns added later (kept compatible with older databases)
+{
+  const have = new Set(db.prepare('PRAGMA table_info(inquiries)').all().map(c => c.name));
+  if (!have.has('batch_key')) db.exec('ALTER TABLE inquiries ADD COLUMN batch_key TEXT');            // same message → same key
+  if (!have.has('batch_size')) db.exec('ALTER TABLE inquiries ADD COLUMN batch_size INTEGER');       // products asked in that message
+  if (!have.has('requested_text')) db.exec('ALTER TABLE inquiries ADD COLUMN requested_text TEXT');  // e.g. "DOP" when not in the matrix
+}
+
 /* ---------------- settings ---------------- */
 export const SETTING_DEFAULTS = {
   business_name: 'Pawan Chemicals',
@@ -95,7 +103,8 @@ export const SETTING_DEFAULTS = {
   group_max_replies_per_10min: 15,
   reply_delay_min_sec: 2,
   reply_delay_max_sec: 6,
-  max_chemicals_per_message: 3,
+  max_products_per_message: 10,   // products quoted from one message
+  multi_reply_style: 'combined',  // combined = one message for all products · separate = one message per product
   max_message_length: 450,       // longer messages are usually price lists / broadcasts
   ignore_older_than_sec: 120,    // don't answer backlog after reconnect
   quote_out_of_stock: true,
@@ -273,9 +282,10 @@ export const allAutoReplyOff = () => db.prepare('UPDATE groups SET auto_reply = 
 export const deleteGroup = jid => db.prepare('DELETE FROM groups WHERE account = ? AND jid = ?').run(currentAccount(), jid);
 
 /* ---------------- templates ---------------- */
+export const TEMPLATE_MODES = ['quote', 'deal', 'multi', 'multi_item'];
 export function getTemplates() {
   const rows = Object.fromEntries(db.prepare('SELECT mode, body FROM templates').all().map(r => [r.mode, r.body]));
-  return { quote: rows.quote ?? DEFAULT_TEMPLATES.quote, deal: rows.deal ?? DEFAULT_TEMPLATES.deal };
+  return Object.fromEntries(TEMPLATE_MODES.map(m => [m, rows[m] ?? DEFAULT_TEMPLATES[m]]));
 }
 export function saveTemplate(mode, body) {
   db.prepare(`INSERT INTO templates(mode, body) VALUES(?, ?) ON CONFLICT(mode) DO UPDATE SET body=excluded.body, updated_at=datetime('now')`).run(mode, body);
@@ -288,20 +298,23 @@ export const INQUIRY_STATUSES = ['New', 'Quoted', 'Negotiating', 'Awaiting Owner
 const hydrateInquiry = r => r && ({ ...r, history: JSON.parse(r.history || '[]'), msg_key: r.msg_key ? JSON.parse(r.msg_key) : null });
 
 export function createInquiry(i) {
-  const history = [{ at: new Date().toISOString(), by: 'bot', text: i.status === 'Unmatched' ? 'Request received, no chemical matched' : `Auto-quote sent (${i.intent === 'deal' ? 'Deal & Negotiation' : 'Price Quotation'})` }];
+  const { history_text, ...row } = i;
+  i = row;
+  const history = [{ at: new Date().toISOString(), by: 'bot', text: history_text || (i.status === 'Unmatched' ? 'Request received, no chemical matched' : `Auto-quote sent (${i.intent === 'deal' ? 'Deal & Negotiation' : 'Price Quotation'})`) }];
   const info = db.prepare(`INSERT INTO inquiries(group_jid, group_name, sender_jid, sender_name, sender_phone, message, msg_key, chemical_id,
-      chemical_name, quantity, location, origin, intent, quote_text, quoted_rate, status, history)
+      chemical_name, quantity, location, origin, intent, quote_text, quoted_rate, status, history, batch_key, batch_size, requested_text)
     VALUES(@group_jid, @group_name, @sender_jid, @sender_name, @sender_phone, @message, @msg_key, @chemical_id, @chemical_name,
-      @quantity, @location, @origin, @intent, @quote_text, @quoted_rate, @status, @history)`).run({
+      @quantity, @location, @origin, @intent, @quote_text, @quoted_rate, @status, @history, @batch_key, @batch_size, @requested_text)`).run({
     group_jid: null, group_name: null, sender_jid: null, sender_name: null, sender_phone: null, message: null, chemical_id: null,
     chemical_name: null, quantity: null, location: null, origin: null, intent: null, quote_text: null, quoted_rate: null,
+    batch_key: null, batch_size: null, requested_text: null,
     ...i, msg_key: i.msg_key ? JSON.stringify(i.msg_key) : null, history: JSON.stringify(history),
   });
   return info.lastInsertRowid;
 }
 export const getInquiry = id => hydrateInquiry(db.prepare('SELECT * FROM inquiries WHERE id = ?').get(id));
 
-export function listInquiries({ status, q, from, to, limit = 500 } = {}) {
+export function listInquiries({ status, q, from, to, batch, limit = 500 } = {}) {
   limit = Math.min(Math.max(parseInt(limit, 10) || 500, 1), 50000);
   q = q ? String(q).slice(0, 100) : '';
   const where = []; const p = {};
@@ -309,7 +322,8 @@ export function listInquiries({ status, q, from, to, limit = 500 } = {}) {
     if (status === 'open') where.push("status IN ('New','Quoted','Negotiating','Awaiting Owner','On Hold')");
     else { where.push('status = @status'); p.status = status; }
   }
-  if (q) { where.push('(message LIKE @q OR chemical_name LIKE @q OR group_name LIKE @q OR sender_name LIKE @q OR sender_phone LIKE @q OR owner_notes LIKE @q)'); p.q = `%${q}%`; }
+  if (q) { where.push('(message LIKE @q OR chemical_name LIKE @q OR requested_text LIKE @q OR group_name LIKE @q OR sender_name LIKE @q OR sender_phone LIKE @q OR owner_notes LIKE @q)'); p.q = `%${q}%`; }
+  if (batch) { where.push('batch_key = @batch'); p.batch = String(batch).slice(0, 100); }
   if (from) { where.push("date(created_at, '+330 minutes') >= @from"); p.from = from; }
   if (to) { where.push("date(created_at, '+330 minutes') <= @to"); p.to = to; }
   const sql = `SELECT * FROM inquiries ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ${limit}`;

@@ -69,3 +69,17 @@ assert.deepEqual(multi.items.map(i => `${i.chem.name}:${i.quantity?.text}`), ['I
 const shared = A('PA and MA rate 5 MT');
 assert.deepEqual(shared.items.map(i => i.quantity?.text), ['5 MT', '5 MT']);  // one qty for the whole message is shared
 console.log('per-item quantity checks passed:', shared.items.map(i => `${i.chem.name}:${i.quantity?.text}`));
+
+// ---- multi-product lists ----
+const L = (msg) => A(msg).items.map(i => `${i.chem.name}|${i.quantity?.text || '-'}|${(i.origins || []).join('/') || '-'}`);
+assert.deepEqual(L('Need rates:\n1. PA korea 2 MT\n2. MA china 5 MT\n3. IPA 20 drums'),
+  ['Phthalic Anhydride|2 MT|Korea', 'Maleic Anhydride|5 MT|China', 'Isopropyl Alcohol|20 DRUMS|-'], 'numbered list');
+assert.deepEqual(L('PA 2 MT, AA china 10 MT & IPA 5 drums rate pls'),
+  ['Phthalic Anhydride|2 MT|-', 'Acrylic Acid|10 MT|China', 'Isopropyl Alcohol|5 DRUMS|-'], 'origin only applies to its own product');
+assert.deepEqual(L('Rates for PA, MA, IPA - 5 MT each'), ['Phthalic Anhydride|5 MT|-', 'Maleic Anhydride|5 MT|-', 'Isopropyl Alcohol|5 MT|-'], '"each" shares the quantity');
+assert.deepEqual(L('PA 2 MT, MA rate pls'), ['Phthalic Anhydride|2 MT|-', 'Maleic Anhydride|-|-'], 'no quantity borrowed from another product');
+assert.deepEqual(L('Required, all china origin:\nAA 10 MT\nMA 5 MT'), ['Acrylic Acid|10 MT|China', 'Maleic Anhydride|5 MT|China'], 'list-wide origin');
+const un = A('Need:\n- PA 3 MT\n- DOP 1 tanker\n- maleic 1,000 kg');
+assert.deepEqual(un.unmatchedItems.map(u => `${u.name}|${u.quantity.text}`), ['DOP|1 TANKER'], 'unknown product picked out');
+assert.equal(un.items.find(i => i.chem.name === 'Maleic Anhydride').quantity.text, '1000 KG', 'thousands separator');
+console.log('multi-product list checks passed');

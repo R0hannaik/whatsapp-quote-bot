@@ -18,7 +18,7 @@ const UNIT_MAP = {
   containers: 'CONTAINERS', truck: 'TRUCK', trucks: 'TRUCKS', load: 'LOAD', loads: 'LOADS', gaadi: 'TRUCK', gadi: 'TRUCK', pallet: 'PALLET',
   pallets: 'PALLETS', carboy: 'CARBOY', carboys: 'CARBOYS', jumbo: 'JUMBO BAG', jumbos: 'JUMBO BAGS', pcs: 'PCS',
 };
-const QTY_RE = /(\d+(?:[.,]\d+)?)\s*(m\.t\.?|mts?|tonnes?|tons?|tonn|tn|kgs?|kilos?|bags?|drums?|ltrs?|litres?|liters?|ibcs?|tankers?|fcl|containers?|trucks?|loads?|gaadi|gadi|pallets?|carboys?|jumbos?|pcs)(?![a-z])/i;
+const QTY_RE = /(\d{1,3}(?:,\d{2,3})+(?![\d.])|\d+(?:[.,]\d+)?)\s*(m\.t\.?|mts?|tonnes?|tons?|tonn|tn|kgs?|kilos?|bags?|drums?|ltrs?|litres?|liters?|ibcs?|tankers?|fcl|containers?|trucks?|loads?|gaadi|gadi|pallets?|carboys?|jumbos?|pcs)(?![a-z])/i;
 const QTY_T_RE = /(\d+(?:\.\d+)?)t(?![a-z])/i;
 
 export const ORIGINS = {
@@ -83,7 +83,8 @@ export function buildIndex(chemicals) {
 
 /* ---------- detection ---------- */
 function toQty(m) {
-  const num = m[1].replace(',', '.');
+  // "1,000" / "1,00,000" are thousands separators; "2,5" is a decimal comma
+  const num = /^\d{1,3}(,\d{2,3})+$/.test(m[1]) && /,\d{3}$/.test(m[1]) ? m[1].replace(/,/g, '') : m[1].replace(',', '.');
   const key = (m[2] || 't').toLowerCase();
   const unit = UNIT_MAP[key.replace(/\.$/, '')] || UNIT_MAP[key] || key.toUpperCase();
   return { value: Number(num), unit, text: `${num} ${unit}`, index: m.index, raw: m[0] };
@@ -148,7 +149,7 @@ function findChemicals(original, norm, index, hasQty) {
   const hits = [];
   const take = (entry, start, len, how) => {
     for (let k = start; k < start + len; k++) used[k] = true;
-    if (!hits.some(h => h.chem.id === entry.chem.id)) hits.push({ chem: entry.chem, alias: entry.alias, pos: start, how });
+    if (!hits.some(h => h.chem.id === entry.chem.id)) hits.push({ chem: entry.chem, alias: entry.alias, pos: start, len, how });
   };
 
   // 1) exact token-sequence matches (longest alias first)
@@ -182,16 +183,47 @@ function findChemicals(original, norm, index, hasQty) {
   return hits.sort((a, b) => a.pos - b.pos);
 }
 
+/* ---------- list handling: "PA 2 MT, MA china 5 MT & IPA 20 drums" ---------- */
+
+/** Character offset of every normalised token in the original text (same tokenisation as normalize()). */
+function tokenOffsets(original) {
+  const out = [];
+  const re = /[a-z0-9ऀ-ॿ]+(?:\.(?=[a-z0-9])[a-z0-9ऀ-ॿ]+)*/gi;
+  let m;
+  while ((m = re.exec(original))) out.push(m.index);
+  return out;
+}
+
+/** Split points between list items: new lines, ; , & + and aur (but not "1,000"). */
+function segmentStarts(original) {
+  const starts = [0];
+  const re = /\n|;|,(?!\d)|\s&\s|\s\+\s|\s(?:and|aur|or|n)\s/gi;
+  let m;
+  while ((m = re.exec(original))) starts.push(m.index + m[0].length);
+  return starts;
+}
+const segOf = (starts, offset) => { let k = 0; while (k + 1 < starts.length && starts[k + 1] <= offset) k++; return k; };
+
+// Words that are not product names (used to pull "DOP" out of "4. DOP 1 tanker rate pls").
+const FILLER = new Set(['for', 'of', 'the', 'a', 'an', 'to', 'in', 'at', 'ex', 'on', 'with', 'is', 'are', 'also', 'bhi', 'hai', 'he', 'kya', 'ka', 'ki',
+  'ke', 'ko', 'se', 'me', 'mein', 'and', 'aur', 'or', 'each', 'har', 'ek', 'all', 'total', 'approx', 'around', 'qty', 'quantity', 'delivery', 'dispatch',
+  'material', 'materials', 'product', 'products', 'item', 'items', 'grade', 'today', 'kal', 'aaj', 'asap', 'immediate', 'immediately', 'sir', 'ji',
+  'bhai', 'dear', 'hi', 'hello', 'good', 'morning', 'team', 'origin', 'make', 'brand', 'basis', 'ready', 'stock', 'nos', 'no', 'pcs', 'month', 'monthly',
+  'per', 'every', 'week', 'weekly', 'regular', 'urgently']);
+
 /**
  * analyze(text, chemicals, opts) -> {
- *   isRequest, skipReason, intent: 'quote'|'deal', items: [{chem, alias, how}], quantity, location, origins, brands
+ *   isRequest, skipReason, intent: 'quote'|'deal',
+ *   items: [{chem, alias, how, quantity, origins, brands}],   // one per product, with its own details
+ *   unmatchedItems: [{name, quantity}],                        // list lines naming products not in the matrix
+ *   quantity, location, origins, brands                        // message-wide (first qty, all origins…)
  * }
  */
 export function analyze(text, chemicals, opts = {}) {
   const original = String(text || '').trim();
   const norm = normalize(original);
   const toks = norm.split(' ').filter(Boolean);
-  const res = { isRequest: false, skipReason: null, intent: 'quote', items: [], quantity: null, location: null, origins: [], brands: [] };
+  const res = { isRequest: false, skipReason: null, intent: 'quote', items: [], unmatchedItems: [], quantity: null, location: null, origins: [], brands: [] };
   if (!norm) { res.skipReason = 'empty'; return res; }
   const limit = Math.min(Number(opts.maxLength) || 2000, 2000);   // hard cap keeps typo-matching cheap
   if (original.length > limit) { res.skipReason = 'too long (looks like a price list / broadcast)'; return res; }
@@ -204,22 +236,54 @@ export function analyze(text, chemicals, opts = {}) {
   res.origins = detectOrigins(toks);
   res.items = findChemicals(original, norm, index, !!qty);
 
-  // Give each chemical its own quantity: "IPA 20 drums and MSG 1 ton"
-  const placed = res.items.map(it => ({ it, at: rawIndex(original, it.alias) })).sort((a, b) => a.at - b.at);
-  placed.forEach((p, k) => {
-    const next = placed[k + 1]?.at ?? Infinity;
-    const own = p.at >= 0 ? qtys.find(q => q.index > p.at && q.index < next) : null;
-    p.it.quantity = own || (qtys.length === 1 || p.at < 0 ? qty : null);
-  });
+  // ---- where is everything in the text? ----
+  let offs = tokenOffsets(original);
+  if (offs.length !== toks.length) offs = null;                        // unusual script mix: fall back to text search
+  const at = it => offs ? offs[it.pos] : rawIndex(original, it.alias);
+  const starts = segmentStarts(original);
+  const placed = res.items.map(it => ({ it, at: at(it) })).sort((a, b) => a.at - b.at);
+  const itemSegs = new Set(placed.filter(p => p.at >= 0).map(p => segOf(starts, p.at)));
+  const lastItemAt = Math.max(-1, ...placed.map(p => p.at));
+  const eachWord = /\b(each|every one|har ek|sab|all)\b/i.test(original);
 
-  // brand mentions (e.g. "IGPL", "Tengda", "Aekyung")
-  const brands = new Set();
-  for (const it of res.items) {
+  // origins with their positions; an origin in a line without any product applies to all products ("All China origin")
+  const originAt = offs ? toks.map((t, i) => ORIGINS[t] ? { name: ORIGINS[t], seg: segOf(starts, offs[i]) } : null).filter(Boolean) : [];
+  const globalOrigins = offs ? [...new Set(originAt.filter(o => !itemSegs.has(o.seg)).map(o => o.name))] : res.origins;
+
+  placed.forEach((p, k) => {
+    const it = p.it;
+    const seg = p.at >= 0 ? segOf(starts, p.at) : -1;
+    const next = placed[k + 1]?.at ?? Infinity;
+    // quantity: right after this product (before the next one), else anywhere in its line/segment
+    let own = p.at >= 0 ? qtys.find(q => q.index > p.at && q.index < next && segOf(starts, q.index) === seg) : null;
+    if (!own && seg >= 0) own = qtys.find(q => segOf(starts, q.index) === seg && !placed.some(o => o !== p && o.at >= 0 && segOf(starts, o.at) === seg && o.at < q.index && o.at > p.at));
+    // one quantity for the whole list ("PA, MA, IPA – 5 MT each" / "PA and MA rate 5 MT")
+    if (!own && qtys.length === 1 && (eachWord || qtys[0].index > lastItemAt || p.at < 0)) own = qtys[0];
+    it.quantity = own || null;
+    // origin(s) named for this product, else ones stated for the whole list
+    const segOrigins = offs && seg >= 0 ? [...new Set(originAt.filter(o => o.seg === seg).map(o => o.name))] : [];
+    it.origins = segOrigins.length ? segOrigins : (placed.length === 1 ? res.origins : globalOrigins);
+    // brand mentions for this product (e.g. "IGPL", "Tengda", "Aekyung")
+    const segText = seg >= 0 ? normalize(original.slice(starts[seg], starts[seg + 1] ?? original.length)) : norm;
     const cands = [it.chem.manufacturer, ...(it.chem.origin_rates || []).map(o => o.brand)].filter(Boolean)
       .flatMap(b => String(b).split(/[\/,&]/)).map(b => b.trim()).filter(b => b.length >= 3);
-    for (const b of cands) if (hasPhrase(norm, b)) brands.add(b);
+    it.brands = [...new Set(cands.filter(b => hasPhrase(segText, b) || (placed.length === 1 && hasPhrase(norm, b))))];
+  });
+  res.brands = [...new Set(res.items.flatMap(i => i.brands))];
+
+  // ---- list lines that name a product we don't have ("4. DOP 1 tanker") ----
+  if (starts.length > 1) {
+    const stop = new Set([...STRONG_REQUEST, ...WEAK_REQUEST, ...FILLER, ...Object.keys(ORIGINS), ...Object.keys(UNIT_MAP), ...LOCATIONS.map(l => normalize(l))]);
+    for (let sIdx = 0; sIdx < starts.length; sIdx++) {
+      if (itemSegs.has(sIdx)) continue;
+      const raw = original.slice(starts[sIdx], starts[sIdx + 1] ?? original.length);
+      const segQty = qtys.find(q => segOf(starts, q.index) === sIdx);
+      if (!segQty) continue;                                            // only lines that ask for an amount
+      const words = raw.replace(/^\s*(\d+\s*[.)\-:]|[-•*·]+)\s*/, '').replace(segQty.raw, ' ')
+        .split(/[^A-Za-z0-9ऀ-ॿ.\-]+/).filter(w => w && !stop.has(normalize(w)) && !/^\d/.test(w) && normalize(w).length >= 2);
+      if (words.length && words.length <= 5) res.unmatchedItems.push({ name: words.join(' ').slice(0, 40), quantity: segQty });
+    }
   }
-  res.brands = [...brands];
 
   // --- is this a request (buyer) or an offer (seller) / chit-chat? ---
   const tokSet = new Set(toks);

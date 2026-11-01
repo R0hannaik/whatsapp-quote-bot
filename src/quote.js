@@ -42,6 +42,21 @@ export function rateDetails(chem, { origins = [], brands = [] } = {}) {
   return [note, '💰 *Rates by Origin / Mfr:*', ...lines, gstNote ? `  ${gstNote}` : ''].filter(Boolean).join('\n');
 }
 
+/** One-line rate for compact lists: "Korea ₹110.00 · China ₹138.00 /kg". */
+export function rateShort(chem, { origins = [], brands = [] } = {}) {
+  const unit = chem.unit || 'kg';
+  let rates = chem.origin_rates || [];
+  if (rates.length && (origins.length || brands.length)) {
+    const want = rates.filter(r => origins.some(o => r.country.toLowerCase() === o.toLowerCase()) ||
+      brands.some(b => (r.brand || '').toLowerCase().includes(b.toLowerCase())));
+    if (want.length) rates = want;
+  }
+  if (!rates.length) return chem.price != null ? `${inr(chem.price)} /${unit}` : 'On request';
+  const parts = rates.map(r => `${r.country}${r.brand ? ` (${r.brand})` : ''} ${inr(r.rate)}`);
+  if (chem.price != null && rates === chem.origin_rates) parts.unshift(`${chem.manufacturer || 'Standard'} ${inr(chem.price)}`);
+  return `${parts.join(' · ')} /${unit}`;
+}
+
 export function buildVars(chem, analysis = {}, settings = {}, extra = {}) {
   const code = shortCode(chem, analysis.alias);
   const qty = analysis.quantity;
@@ -50,6 +65,9 @@ export function buildVars(chem, analysis = {}, settings = {}, extra = {}) {
   return {
     product_name: code && code.toLowerCase() !== chem.name.toLowerCase() ? `${chem.name} (${code})` : chem.name,
     rate_details: rateDetails(chem, analysis),
+    rate_short: rateShort(chem, analysis),
+    quantity: qty ? qty.text : '',
+    n: extra.n != null ? String(extra.n) : '',
     packaging: chem.packaging || '',
     location: chem.location || settings.default_location || '',
     status: chem.status || '',
