@@ -624,6 +624,9 @@ async function loadOrders() {
       await api('PATCH', `/api/inquiries/${sel.dataset.status}`, { status: sel.value }); toast(`Marked as ${sel.value}`); loadOrders(); pollStatus();
     }));
     $('#ordRows').addEventListener('click', e => {
+      const po = e.target.closest('[data-pay-order]')?.dataset.payOrder; if (po) return openPaymentOrderModal(Number(po));
+      const rec = e.target.closest('[data-record]')?.dataset.record;
+      if (rec) return openPaymentOrderModal(null, state.orders.items.find(x => x.id === Number(rec)));
       const id = e.target.closest('[data-open]')?.dataset.open; if (id) openOrderModal(Number(id));
       const b = e.target.closest('[data-batch]')?.dataset.batch;
       if (b) { state.orderFilter = { status: 'all', q: '', batch: b }; $('#ordSearch').value = ''; loadOrders(); }
@@ -634,7 +637,7 @@ async function loadOrders() {
     ['Enquiries today', s.today], ['Quotes sent today', s.quotedToday], ['Open (needs decision)', s.pending, 'hl'], ['Negotiating', s.negotiating, 'hl'],
     ['Confirmed (30 days)', s.confirmed], ['Unmatched requests', s.unmatched],
   ].map(([k, v, c]) => `<div class="stat ${c || ''}"><div class="k">${k}</div><div class="v">${v ?? 0}</div></div>`).join('');
-  const pills = [['open', 'Open'], ['all', 'All'], ...state.orders.statuses.map(x => [x, x])];
+  const pills = [['open', 'Open'], ['all', 'All'], ['payment_pending', `💰 Payment pending${s.paymentPending ? ` (${s.paymentPending})` : ''}`], ...state.orders.statuses.map(x => [x, x])];
   $('#ordPills').innerHTML = state.orderFilter.batch
     ? `<span class="spill active">🧾 Showing one multi-product enquiry</span><button class="spill" data-clear-batch>✕ Back to all</button>`
     : pills.map(([k, l]) => `<button class="spill ${state.orderFilter.status === k ? 'active' : ''}" data-st="${esc(k)}">${esc(l)}</button>`).join('');
@@ -646,7 +649,7 @@ async function loadOrders() {
     <td>${i.chemical_name ? `<div style="font-weight:600">${esc(i.chemical_name)}</div>` : `<span class="badge b-gray">Not in matrix</span>${i.requested_text ? ` <b>${esc(i.requested_text)}</b>` : ''}`}<div class="sub">${esc([i.quantity, i.location, i.origin].filter(Boolean).join(' · '))}</div>
       ${i.batch_size > 1 ? `<button class="link-btn batch-link" data-batch="${esc(i.batch_key)}" title="Show all products from this message">🧾 ${i.batch_size}-product enquiry</button>` : ''}</td>
     <td style="max-width:220px"><div class="sub" style="color:var(--ink-2)">${esc(i.quoted_rate || '—')}</div>${i.final_rate ? `<div class="stock-note">Final: ${esc(i.final_rate)}</div>` : ''}</td>
-    <td><select class="input status-select badge ${ORDER_CLASS[i.status] || 'b-gray'}" data-status="${i.id}">${state.orders.statuses.map(s => `<option ${s === i.status ? 'selected' : ''}>${s}</option>`).join('')}</select></td>
+    <td><select class="input status-select badge ${ORDER_CLASS[i.status] || 'b-gray'}" data-status="${i.id}">${state.orders.statuses.map(s => `<option ${s === i.status ? 'selected' : ''}>${s}</option>`).join('')}</select>${paymentBadge(i, state.orders.today)}</td>
     <td><button class="btn btn-light btn-sm" data-open="${i.id}">Open</button></td></tr>`).join('')
     : `<tr><td colspan="7" class="empty">No enquiries here yet. They appear automatically when someone asks for a rate in a group with auto-reply ON.</td></tr>`;
 }
@@ -673,7 +676,8 @@ function openOrderModal(id) {
           <div class="field"><label>Final Qty</label><input class="input" id="oQty" value="${esc(i.final_qty || i.quantity || '')}" placeholder="2 MT"></div></div>
           <div class="field"><label>Notes (private)</label><textarea class="input" id="oNotes" rows="3" placeholder="Payment terms, delivery date, buyer details…">${esc(i.owner_notes || '')}</textarea></div>
           <button class="btn btn-dark btn-sm" id="oSave">Save decision</button>
-          <button class="btn btn-green btn-sm" id="oRecord" title="Saves the order and starts payment tracking & reminders">📦 Record order &amp; track payment</button>
+          ${i.order ? `<div style="margin-top:12px">${paymentBadge(i)} <button class="btn btn-light btn-sm" id="oOpenOrder">Open order #${i.order.order_id}</button></div>`
+            : `<button class="btn btn-green btn-sm" id="oRecord" title="Saves the order and starts payment tracking & reminders">📦 Record order &amp; track payment</button>`}
         </div>
       </div>
       <hr style="border:0;border-top:1px solid var(--line);margin:24px 0">
@@ -694,7 +698,8 @@ function openOrderModal(id) {
   };
   $$('[data-set]', m.el).forEach(b => b.onclick = guard(async () => { await save({ status: b.dataset.set }); toast(`Marked as ${b.dataset.set}`); openOrderModal(i.id); }));
   $('#oSave', m.el).onclick = guard(async () => { await save({}); toast('Decision saved'); openOrderModal(i.id); });
-  $('#oRecord', m.el).onclick = () => openPaymentOrderModal(null, { ...i, final_rate: $('#oRate', m.el).value, final_qty: $('#oQty', m.el).value });
+  $('#oOpenOrder', m.el)?.addEventListener('click', () => openPaymentOrderModal(i.order.order_id));
+  $('#oRecord', m.el) && ($('#oRecord', m.el).onclick = () => openPaymentOrderModal(null, { ...i, final_rate: $('#oRate', m.el).value, final_qty: $('#oQty', m.el).value }));
   $$('[data-quick]', m.el).forEach(b => b.onclick = () => { $('#oMsg', m.el).value = quick[Number(b.dataset.quick)][1](); });
   $('#oSend', m.el).onclick = guard(async () => {
     const text = $('#oMsg', m.el).value.trim(); if (!text) throw new Error('Type a message first');
@@ -856,6 +861,17 @@ function applyBrand() {
 }
 
 /* =========================================================== PAYMENTS */
+/** Read-only payment status for an enquiry row; the order itself is the one place payment is changed. */
+function paymentBadge(i, today = istToday()) {
+  const o = i.order;
+  if (!o) return i.status === 'Confirmed'
+    ? `<button class="link-btn pay-badge" data-record="${i.id}" title="Record the order to start payment tracking and reminders">📦 No order recorded yet</button>` : '';
+  if (o.payment_status === 'Paid') return `<button class="badge b-green pay-badge" data-pay-order="${o.order_id}" title="Open order">✅ Paid ${fmtDay(o.paid_date)}</button>`;
+  const d = dayDiff(today, o.due_date);
+  const label = d < 0 ? `⚠ ${-d} day${d === -1 ? '' : 's'} overdue` : d === 0 ? '💰 Payment due today' : `💰 Payment pending · due ${fmtDay(o.due_date).replace(/ \d{4}$/, '')}`;
+  return `<button class="badge ${d < 0 ? 'b-red' : 'b-amber'} pay-badge" data-pay-order="${o.order_id}" title="Open order">${label}</button>`;
+}
+
 const WHO = { bot: 'Bot', owner: 'You', buyer: 'Buyer' };
 function timelineEvent(h) { return `<div class="ev ${esc(h.by)}"><small>${fmtTime(h.at)} · ${WHO[h.by] || esc(h.by)}</small>${esc(h.text)}</div>`; }
 const rupees = n => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
@@ -918,6 +934,8 @@ async function loadPayments() {
     <td><button class="btn btn-light btn-sm" data-open-order="${o.id}">Open</button></td></tr>`).join('')
     : `<tr><td colspan="8" class="empty">${state.payFilter.status === 'Pending' ? 'No pending payments. Record an order from <b>Orders &amp; Decisions → Open → 📦 Record order</b>, or use <b>+ New Order</b>.' : 'Nothing here.'}</td></tr>`;
 }
+
+const refreshOrderViews = () => { if (state.tab === 'orders') guard(loadOrders)(); else guard(loadPayments)(); pollStatus(); };
 
 /** Create (from an enquiry or from scratch) or edit an order. */
 async function openPaymentOrderModal(id, fromInquiry = null) {
@@ -1004,17 +1022,16 @@ async function openPaymentOrderModal(id, fromInquiry = null) {
     if (!isNew && chatType === 'group' && o.chat_type !== 'group') throw new Error('This order was set up for a private chat — create a new order to remind in a group');
     const saved = await api(isNew ? 'POST' : 'PATCH', isNew ? '/api/orders' : `/api/orders/${o.id}`, body);
     m.close(); toast(isNew ? `Order #${saved.id} saved — payment tracking started` : 'Order updated');
-    if (state.tab === 'payments') loadPayments(); else if (state.tab === 'orders') loadOrders();
-    pollStatus();
+    refreshOrderViews();
   });
-  $('#poPaid', m.el)?.addEventListener('click', guard(async () => { await api('POST', `/api/orders/${o.id}/status`, { status: 'Paid' }); m.close(); toast('Marked Paid — reminders stopped'); loadPayments(); pollStatus(); }));
-  $('#poUnpaid', m.el)?.addEventListener('click', guard(async () => { await api('POST', `/api/orders/${o.id}/status`, { status: 'Pending' }); m.close(); toast('Marked Pending — reminders resumed'); loadPayments(); pollStatus(); }));
+  $('#poPaid', m.el)?.addEventListener('click', guard(async () => { await api('POST', `/api/orders/${o.id}/status`, { status: 'Paid' }); m.close(); toast('Marked Paid — reminders stopped'); refreshOrderViews(); }));
+  $('#poUnpaid', m.el)?.addEventListener('click', guard(async () => { await api('POST', `/api/orders/${o.id}/status`, { status: 'Pending' }); m.close(); toast('Marked Pending — reminders resumed'); refreshOrderViews(); }));
   $('#poRemind', m.el)?.addEventListener('click', guard(async () => {
-    const r = await api('POST', `/api/orders/${o.id}/remind`); toast(`Reminder #${r.reminders_sent} sent`); m.close(); loadPayments();
+    const r = await api('POST', `/api/orders/${o.id}/remind`); toast(`Reminder #${r.reminders_sent} sent`); m.close(); refreshOrderViews();
   }));
   $('#poDel', m.el)?.addEventListener('click', guard(async () => {
     if (!await confirmBox('Delete order?', 'The order and its reminders are removed. This cannot be undone.', 'Delete')) return openPaymentOrderModal(o.id);
-    await api('DELETE', `/api/orders/${o.id}`); toast('Order deleted'); loadPayments(); pollStatus();
+    await api('DELETE', `/api/orders/${o.id}`); toast('Order deleted'); refreshOrderViews();
   }));
 }
 

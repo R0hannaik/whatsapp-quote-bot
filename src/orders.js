@@ -164,6 +164,17 @@ export function setPaymentStatus(id, status) {
   return getOrder(id);
 }
 
+/** Latest order recorded for each of these enquiries: { inquiryId: {order_id, payment_status, due_date, paid_date, amount} } */
+export function ordersForInquiries(ids) {
+  const list = ids.map(Number).filter(Number.isInteger);
+  if (!list.length) return {};
+  const rows = db.prepare(`SELECT id, inquiry_id, payment_status, due_date, paid_date, amount FROM orders
+    WHERE inquiry_id IN (${list.join(',')}) ORDER BY id`).all();
+  return Object.fromEntries(rows.map(r => [r.inquiry_id, { order_id: r.id, payment_status: r.payment_status, due_date: r.due_date, paid_date: r.paid_date, amount: r.amount }]));
+}
+/** Enquiries whose order still has a pending payment. */
+export const pendingInquiryIds = () => db.prepare("SELECT DISTINCT inquiry_id FROM orders WHERE payment_status = 'Pending' AND inquiry_id IS NOT NULL").all().map(r => r.inquiry_id);
+
 export const deleteOrder = id => db.prepare('DELETE FROM orders WHERE id = ?').run(id);
 
 export function listOrders({ status = 'Pending', q } = {}) {

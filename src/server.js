@@ -193,7 +193,15 @@ app.post('/api/simulate', wrap(async (req, res) => {
 }));
 
 /* inquiries / orders */
-app.get('/api/inquiries', (req, res) => res.json({ items: db.listInquiries({ ...req.query, limit: 500 }), stats: db.inquiryStats(), statuses: db.INQUIRY_STATUSES }));
+app.get('/api/inquiries', (req, res) => {
+  const q = { ...req.query, limit: 500 };
+  delete q.ids;
+  if (q.status === 'payment_pending') q.ids = orders.pendingInquiryIds();
+  const items = db.listInquiries(q);
+  const pay = orders.ordersForInquiries(items.map(i => i.id));
+  for (const i of items) i.order = pay[i.id] || null;   // payment info lives on the order — shown here read-only
+  res.json({ items, stats: { ...db.inquiryStats(), paymentPending: orders.pendingInquiryIds().length }, statuses: db.INQUIRY_STATUSES, today: orders.todayIST() });
+});
 app.patch('/api/inquiries/:id', wrap((req, res) => {
   const { status } = req.body || {};
   if (status && !db.INQUIRY_STATUSES.includes(status)) throw new Error('Unknown status');

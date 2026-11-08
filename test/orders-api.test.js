@@ -78,6 +78,21 @@ describe('orders API', () => {
     assert.match((await call('POST', '/api/reminder-preview', { body: 'Pay {amount} — {due_status}' })).body.text, /^Pay ₹2,56,000 — Payment due on/);
     assert.equal((await call('PUT', '/api/templates/reminder', { body: 'Hi {customer_name}, {amount} pending' })).status, 200);
   });
+  test('Orders & Decisions shows each enquiry\'s payment status (read-only) and filters by it', async () => {
+    const r = await call('GET', '/api/inquiries?status=all');
+    const inq = r.body.items.find(i => i.id === inqId);
+    assert.equal(inq.order.order_id, orderId);
+    assert.equal(inq.order.payment_status, 'Pending');
+    assert.ok(inq.order.due_date);
+    assert.ok(r.body.stats.paymentPending >= 1);
+    const pp = await call('GET', '/api/inquiries?status=payment_pending');
+    assert.deepEqual(pp.body.items.map(i => i.id), [inqId]);
+    await call('POST', `/api/orders/${orderId}/status`, { status: 'Paid' });
+    assert.equal((await call('GET', '/api/inquiries?status=payment_pending')).body.items.length, 0);
+    assert.equal((await call('GET', '/api/inquiries?status=all')).body.items.find(i => i.id === inqId).order.payment_status, 'Paid');
+    await call('POST', `/api/orders/${orderId}/status`, { status: 'Pending' });
+    assert.equal((await call('GET', '/api/inquiries?status=all&ids=1,2,3')).status, 200, 'ids is not a public filter');
+  });
   test('"Send reminder now" fails clearly when WhatsApp is not connected', async () => {
     const r = await call('POST', `/api/orders/${orderId}/remind`);
     assert.equal(r.status, 400);

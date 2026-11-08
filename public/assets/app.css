@@ -282,3 +282,5 @@ table.data tr:hover td { background: #fcfcfd; }
 .stat.od { border-color: var(--red-line); background: var(--red-soft); }
 .stat.od .v { color: var(--red); }
 .timeline .ev.buyer::before { background: var(--blue); }
+.pay-badge { display: block; margin-top: 6px; cursor: pointer; font-size: 12.5px; white-space: nowrap; }
+button.badge.pay-badge:hover { filter: brightness(.97); }

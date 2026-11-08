@@ -160,7 +160,15 @@ describe('dashboard in a browser', { skip }, () => {
     await tab('payments'); await wait(300);
     assert.match(await text('#payRows'), /₹2,56,000/);
     assert.match(await text('#payStats'), /Outstanding[\s\S]*₹2,56,000/i);
-    await page.select('select[data-pay]', 'Paid'); await wait(700);
+    // the enquiry in Orders & Decisions now shows the payment status, linked to the order
+    await tab('orders');
+    await page.click('.spill[data-st=payment_pending]'); await wait(500);
+    assert.match(await text('#ordRows'), /Payment pending · due/);
+    await page.click('[data-pay-order]'); await wait(500);
+    assert.match(await text('.modal-head h3'), /Order #\d+/);
+    await page.click('#poPaid'); await wait(700);
+    assert.match(await text('#ordRows'), /No enquiries here yet/, 'paid → gone from the Payment pending filter');
+    await tab('payments');
     assert.match(await text('#payRows'), /No pending payments/);
   });
 

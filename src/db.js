@@ -323,11 +323,12 @@ export function createInquiry(i) {
 }
 export const getInquiry = id => hydrateInquiry(db.prepare('SELECT * FROM inquiries WHERE id = ?').get(id));
 
-export function listInquiries({ status, q, from, to, batch, limit = 500 } = {}) {
+export function listInquiries({ status, q, from, to, batch, ids, limit = 500 } = {}) {
   limit = Math.min(Math.max(parseInt(limit, 10) || 500, 1), 50000);
   q = q ? String(q).slice(0, 100) : '';
   const where = []; const p = {};
-  if (status && status !== 'all') {
+  if (Array.isArray(ids)) { where.push(`id IN (${ids.map(Number).filter(Number.isInteger).join(',') || 'NULL'})`); }
+  if (status && status !== 'all' && status !== 'payment_pending') {
     if (status === 'open') where.push("status IN ('New','Quoted','Negotiating','Awaiting Owner','On Hold')");
     else { where.push('status = @status'); p.status = status; }
   }

@@ -95,7 +95,7 @@ Your part:
 ## Tests
 
 ```bash
-npm test            # everything (~1 min): 196 checks
+npm test            # everything (~1 min): 197 checks
 npm run test:quick  # just message reading, quotes, replies and database (a few seconds)
 ```
 
