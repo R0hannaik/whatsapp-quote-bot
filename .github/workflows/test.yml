@@ -41,5 +41,19 @@ jobs:
           docker restart qb && sleep 8
           curl -fsS -c c.txt -H 'Content-Type: application/json' -H 'Origin: http://127.0.0.1:3000' -d '{"password":"ci-password-123"}' http://127.0.0.1:3000/api/login
           curl -fsS -b c.txt http://127.0.0.1:3000/api/chemicals | grep -q "CI Chemical"
+      - name: App runs as "node", not root
+        run: |
+          docker exec qb sh -c 'grep -E "^(Uid|CapEff)" /proc/1/status'
+          [ "$(docker exec qb stat -c %U /proc/1)" = node ]
+          docker exec qb sh -c 'grep -q "^CapEff:\s*0000000000000000" /proc/1/status'
+      - name: Works with a root-owned disk (like Render / Fly.io volumes)
+        run: |
+          sudo mkdir -p /tmp/rootdisk && sudo chown root:root /tmp/rootdisk && sudo chmod 755 /tmp/rootdisk
+          docker run -d --name qb2 -e DASHBOARD_PASSWORD=ci-password-123 -e WA_DISABLED=1 -e TRIAL_MODE=1 -v /tmp/rootdisk:/app/data -p 3001:3000 quotebot
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3001/healthz && break; sleep 2; done
+          curl -fsS http://127.0.0.1:3001/healthz
+          sudo test -f /tmp/rootdisk/quotebot.db
+          [ "$(sudo stat -c %U /tmp/rootdisk/quotebot.db)" != root ]
+          [ "$(sudo stat -c %a /tmp/rootdisk)" = 700 ]
       - if: failure()
-        run: docker logs qb
+        run: docker logs qb; docker logs qb2 || true

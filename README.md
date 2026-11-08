@@ -46,7 +46,7 @@ npm start                   # → http://localhost:3000
 3. **WhatsApp Groups Monitor → Sync Live Groups**, then switch ON the groups where the bot should quote.
 4. Fill in your **Chemicals & Rates Matrix** and test in **Reply Templates** by typing messages in the preview.
 
-**Showing it to a client:** `npm run demo` starts a separate demo with sample data and a simulated WhatsApp (*💬 Demo Chat*). Share it from your Mac or free on Render. To let a client **link their own WhatsApp** and try the real bot, `npm run trial` — see **[SHARING.md](SHARING.md)**.
+**Showing it to a client:** `npm run demo` starts a separate demo with sample data and a simulated WhatsApp (*💬 Demo Chat*). Share it from your Mac or free on Render. To let a client **link their own WhatsApp** and try the real bot, `npm run trial` on your Mac, or host it 24×7 on Render with `render-trial.yaml` — see **[SHARING.md](SHARING.md)**.
 
 **Putting it on the web (24×7, HTTPS, your own domain):** see **[DEPLOY.md](DEPLOY.md)** — Docker + automatic HTTPS in a few commands, plus how the database is stored, backed up and restored.
 

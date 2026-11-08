@@ -1,0 +1,27 @@
+# Always-on hosted TRIAL on Render: the client links their own WhatsApp and tries the real bot.
+# Render → New → Blueprint → this repo → set the Blueprint file to "render-trial.yaml".
+# Costs about US$7.25/month (0.5 CPU / 512 MB instance + 1 GB disk). Delete the service to stop paying.
+# Needs the paid instance: the free one sleeps after 15 min (bot stops answering) and has no disk (WhatsApp unlinks on restart).
+services:
+  - type: web
+    name: quotebot-trial
+    runtime: docker
+    plan: 0.5c-512mb
+    region: singapore          # closest Render region to India
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    disk:                      # database + WhatsApp login survive restarts and redeploys
+      name: quotebot-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: TRIAL_MODE        # trial checklist + Test mode at the first start; remove when the client goes live
+        value: "1"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: WA_DEVICE_NAME    # what the client sees under WhatsApp → Linked devices
+        value: Quote Bot (trial)
+      - key: DASHBOARD_PASSWORD   # the client's login (12+ characters) — Render asks for it
+        sync: false
+      - key: CONTACT_PHONE     # number printed in quotations, e.g. +91 98xxx xxxxx (optional)
+        sync: false
