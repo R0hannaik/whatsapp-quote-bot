@@ -12,6 +12,8 @@ try { fs.chmodSync(DATA_DIR, 0o700); } catch { /* not supported on this filesyst
 
 export const db = new Database(path.join(DATA_DIR, 'quotebot.db'));
 db.pragma('journal_mode = WAL');
+// FULL: every saved change is flushed to disk before it counts as saved — no lost orders on a power cut or crash.
+db.pragma('synchronous = FULL');
 db.pragma('foreign_keys = ON');
 
 db.exec(`
@@ -126,6 +128,7 @@ export const SETTING_DEFAULTS = {
   order_keywords: 'confirm, confirmed, book, booking, book karo, po, purchase order, place order, order confirm, order karo, lock, lock karo, dispatch, dispatch karo, deal done, done deal, proceed, go ahead, final kar do, pakka',
   backup_hour_ist: 3,             // daily database backup time (India time, 0–23)
   backup_keep_days: 14,           // how many daily backups to keep
+  offsite_every_hours: 1,         // encrypted off-site copy every N hours (0 = off); needs BACKUP_S3_* in .env
 };
 
 /** Settings that come from .env when present (kept out of the code and the database). */

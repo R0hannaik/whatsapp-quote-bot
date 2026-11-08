@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc14",
+    "aws4fetch": "^1.0.20",
     "better-sqlite3": "^13.0.3",
     "express": "^5.3.0",
     "pino": "^10.4.0",

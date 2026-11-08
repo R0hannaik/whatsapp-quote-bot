@@ -123,22 +123,97 @@ The `data` folder is private to the app (owner-only permissions) and is never ex
 Backups are made with SQLite's online backup, so they are consistent even while the bot is working.
 They don't include the WhatsApp login (on purpose — it's a secret); after a restore you just scan the QR again.
 
+### How the data is protected (and why this way)
+
+| Option | Protects against | Weak spots | Used here? |
+|---|---|---|---|
+| **Local backups on the server** | Mistakes, bad edits, a damaged database file | Lost together with the server (deleted, hacked, disk failure) | ✅ Daily, each one verified + checksummed |
+| **Manual download** (Settings → Download) | Losing the server | Depends on you remembering; unencrypted copies end up on laptops/Drive | Optional extra |
+| **Provider server snapshots** | Losing the whole server | Same provider and account; usually daily/weekly only; contains secrets unencrypted | Optional extra |
+| **Automatic Google Drive upload** | Losing the server | The server would hold a login that can read/delete your *whole* Drive; anyone who gets in can wipe the backups; no immutability | ❌ |
+| **Encrypted off-site copy to S3-compatible storage** | Losing the server, a hacked server, ransomware, the storage provider reading your data | Needs a one-time bucket setup; **you must keep the passphrase safe** | ✅ **Hourly — recommended** |
+| Continuous replication (e.g. Litestream) | Even the last hour's changes | Extra moving part to run and monitor; more to go wrong | ❌ Not needed at this size |
+| Managed cloud database (PostgreSQL) | Server loss, with live failover | Rewriting the app's storage; network dependency; higher cost and more ways in; still needs backups | ❌ Overkill for one bot |
+
+What the chosen setup gives you:
+- **Integrity:** the database writes every change to disk before confirming it (`synchronous=FULL`); every backup is
+  integrity-checked and checksummed (SHA-256) before it is kept; the live database is health-checked daily; a damaged or
+  altered backup is refused at restore time.
+- **Confidentiality:** each off-site copy is compressed and encrypted **on your server** with AES-256-GCM before upload,
+  using a key derived from your passphrase (scrypt). The storage provider only ever sees unreadable bytes.
+- **Can't be wiped:** the server's storage key can upload and read but **not delete**; with versioning + Object Lock on the
+  bucket, even a hacked server can't destroy old backups.
+- **Proven restorable:** a restore drill runs automatically every week (and on demand) — download → decrypt → verify.
+- **At most 1 hour of data at risk** (hourly uploads), plus the daily local backup.
+- **Data stays in India** if you use an India region (e.g. AWS Mumbai `ap-south-1`) — sensible given that buyers' phone
+  numbers are personal data under India's DPDP Act.
+
+### Off-site backups — one-time setup (AWS S3, Mumbai)
+
+1. **Create the bucket** — AWS console → S3 → *Create bucket*
+   - Name: e.g. `yourcompany-quotebot-backups` · Region: **Asia Pacific (Mumbai) ap-south-1**
+   - **Block all public access: ON** (default)
+   - **Bucket Versioning: Enable**
+   - *Advanced settings* → **Object Lock: Enable** → after creating, open *Properties → Object Lock → Edit*:
+     default retention **Governance, 30 days**
+   - Default encryption: SSE-S3 (default) is fine — our own encryption is on top of it
+2. **Keep costs tiny** — *Management → Create lifecycle rule*: expire current versions after **90 days** and permanently
+   delete noncurrent versions after **30 days**. (A year of hourly backups of this database costs very little.)
+3. **Create a restricted access key** — IAM → *Users → Create user* `quotebot-backup` (no console access) →
+   *Add permissions → Create inline policy → JSON*:
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       { "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"],
+         "Resource": "arn:aws:s3:::yourcompany-quotebot-backups/quotebot/*" },
+       { "Effect": "Allow", "Action": "s3:ListBucket",
+         "Resource": "arn:aws:s3:::yourcompany-quotebot-backups",
+         "Condition": { "StringLike": { "s3:prefix": "quotebot/*" } } }
+     ]
+   }
+   ```
+   No delete, no retention changes — exactly what the bot needs and nothing more. Then *Security credentials → Create access key*.
+4. **Make a passphrase** on your computer: `openssl rand -base64 32`.
+   Save it in a password manager **and** on paper in a safe place. Without it, the off-site backups cannot be opened —
+   by anyone, including you.
+5. **Add to `.env`** on the server, then `docker compose up -d`:
+   ```dotenv
+   BACKUP_S3_ENDPOINT=https://s3.ap-south-1.amazonaws.com
+   BACKUP_S3_REGION=ap-south-1
+   BACKUP_S3_BUCKET=yourcompany-quotebot-backups
+   BACKUP_S3_ACCESS_KEY_ID=AKIA…
+   BACKUP_S3_SECRET_ACCESS_KEY=…
+   BACKUP_ENCRYPTION_PASSPHRASE=…the passphrase from step 4…
+   ```
+6. **Check it works** — Settings → Database backups → **Upload now**, then **Run restore drill**. Both should go green.
+
+*Other providers* work the same way (any S3-compatible storage): Cloudflare R2 (`https://<account>.r2.cloudflarestorage.com`,
+region `auto`, use *Bucket locks*), Backblaze B2 (`https://s3.<region>.backblazeb2.com`, enable *Object Lock*). Give the key
+read + write but not delete. Prefer an India region where offered.
+
+If the off-site upload keeps failing for 6 hours, the dashboard shows a warning at the top.
+
 ### Restoring a backup
 ```bash
 cd /opt/quotebot
 docker compose stop app
+# the newest encrypted off-site backup (works on a brand-new server too):
+docker compose run --rm --no-deps app node scripts/restore.js --cloud latest
+#   (see all of them first:  docker compose run --rm --no-deps app node scripts/restore.js --cloud list)
 # a backup that is already on the server:
 docker compose run --rm --no-deps app node scripts/restore.js data/backups/quotebot-2026-11-08_0300.db
 # …or one you downloaded earlier — copy it in first:
 #   docker compose cp ./quotebot-2026-11-08_0300.db app:/app/data/backups/
 docker compose start app
 ```
-The script checks the file is a valid Quote Bot backup, refuses to run while the app is running, and keeps the
-current database as `quotebot.before-restore-<time>.db` so a restore can be undone.
+The script decrypts and checks the backup (wrong passphrase, damaged or altered files are refused), refuses to run while
+the app is running, and keeps the current database as `quotebot.before-restore-<time>.db` so a restore can be undone.
 
-### Moving to a new server
-On the old server: **Back up now** → **Download**. On the new server: install (steps 1–3), restore that backup,
-start, and scan the WhatsApp QR. Unlink the old server's device on the phone.
+### Moving to a new server (or recovering from a lost one)
+Install on the new server (steps 1–3) with the same `.env` (including the `BACKUP_*` lines), then
+`docker compose run --rm --no-deps app node scripts/restore.js --cloud latest`, start, and scan the WhatsApp QR.
+Unlink the old device on the phone if it still shows.
 
 ---
 
@@ -147,7 +222,7 @@ start, and scan the WhatsApp QR. Unlink the old server's device on the phone.
 - [ ] `.env` is `chmod 600`; never commit it to GitHub
 - [ ] Firewall allows only 22, 80, 443; SSH with keys, not passwords
 - [ ] Only HTTPS — Caddy redirects HTTP to HTTPS automatically
-- [ ] Weekly off-server backup download
+- [ ] Off-site encrypted backups set up, restore drill green, passphrase stored in two safe places
 - [ ] Bot runs on a **separate WhatsApp number** (see README → Important notes)
 
 ## Troubleshooting

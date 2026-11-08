@@ -145,6 +145,11 @@ describe('dashboard in a browser', { skip }, () => {
     assert.match(await text('#toasts'), /Backup saved/);
     assert.match(await text('#backupRows'), /quotebot-.*-manual\.db/);
     assert.ok(await page.$('#backupRows a[download]'), 'download link shown');
+    assert.match(await text('#backupRows'), /verified/, 'backups show they were verified');
+    assert.match(await text('#offsiteBox'), /Healthy|Not checked yet/);
+    assert.match(await text('#offsiteBox'), /Not set up/, 'off-site not configured in tests → clear guidance shown');
+    await page.click('#dbCheck'); await wait(500);
+    assert.match(await text('#offsiteBox'), /Healthy/);
   });
 
   test('Record order from an enquiry → shows in Payments → mark Paid', async () => {

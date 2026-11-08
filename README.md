@@ -95,7 +95,7 @@ Your part:
 ## Tests
 
 ```bash
-npm test            # everything (~1 min): 200 checks
+npm test            # everything (~1 min): 222 checks
 npm run test:quick  # just message reading, quotes, replies and database (a few seconds)
 ```
 
@@ -107,6 +107,8 @@ npm run test:quick  # just message reading, quotes, replies and database (a few 
 | `test/db.test.js` | Groups per linked number (incl. upgrading old databases), `.env` settings, chemicals, templates, orders history & filters |
 | `test/whatsapp.test.js` | Live handler with a fake WhatsApp: auto-reply toggles, Test mode, reply-loop guard, cooldowns, group cap, orders records, owner replies, join-link rotation, unlink |
 | `test/api.test.js` | Dashboard server: login, every endpoint, validation, cross-site protection, security headers, CSV formula safety, sessions, brute-force lockout |
+| `test/offsite.test.js` | Data protection: encryption, tamper detection, verified backups, off-site upload/restore with a fake S3, no deletes |
+| `test/payments.test.js` / `test/orders-api.test.js` | Orders, payment reminder schedule and sending, order/follow-up detection |
 | `test/ui.test.js` | Clicks through the dashboard in headless Chrome (skipped if Chrome isn't installed; set `CHROME_PATH` to use another) |
 
 Tests use a temporary database and never read your `.env` or connect to WhatsApp. GitHub runs them on every push

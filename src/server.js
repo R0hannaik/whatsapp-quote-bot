@@ -115,6 +115,7 @@ app.get('/api/status', (_req, res) => {
     },
     stats: db.inquiryStats(),
     payments: orders.paymentStats(),
+    backupProblem: backups.backupProblem(),
   });
 });
 app.get('/api/activity', (_req, res) => res.json(waMod.activity.slice(0, 60)));
@@ -247,6 +248,7 @@ app.put('/api/settings', wrap((req, res) => {
     if (k === 'reminder_repeat_days' && (v < 1 || v > 30)) throw new Error('Repeat every 1–30 days');
     if (k === 'reminder_days_before_due' && v > 30) throw new Error('First reminder can be at most 30 days before the due date');
     if (k === 'backup_hour_ist' && (v > 23 || !Number.isInteger(v))) throw new Error('Backup time must be a whole hour from 0 to 23');
+    if (k === 'offsite_every_hours' && (v > 168 || !Number.isInteger(v))) throw new Error('Off-site backup interval must be 0–168 hours');
     if (k === 'backup_keep_days' && (v < 1 || v > 365)) throw new Error('Keep between 1 and 365 backups');
     if (k === 'multi_reply_style' && !['combined', 'separate'].includes(v)) throw new Error('multi_reply_style must be combined or separate');
     db.setSetting(k, v);
@@ -302,7 +304,11 @@ app.post('/api/reminder-preview', wrap((req, res) => {
 }));
 
 /* backups */
-app.get('/api/backups', (_req, res) => res.json({ items: backups.listBackups(), hour: db.getSetting('backup_hour_ist'), keep: db.getSetting('backup_keep_days') }));
+app.get('/api/backups', (_req, res) => res.json({ items: backups.listBackups(), hour: db.getSetting('backup_hour_ist'), keep: db.getSetting('backup_keep_days'),
+  health: backups.getHealth(), offsite: backups.offsiteStatus(), problem: backups.backupProblem() }));
+app.post('/api/backups/offsite', wrap(async (_req, res) => res.json(await backups.runOffsiteBackup())));
+app.post('/api/backups/offsite/test', wrap(async (_req, res) => res.json(await backups.testOffsiteRestore())));
+app.post('/api/backups/check', wrap((_req, res) => res.json({ ok: backups.checkLiveDb(), health: backups.getHealth() })));
 app.post('/api/backups', wrap(async (_req, res) => res.json(await backups.createBackup({ manual: true }))));
 app.get('/api/backups/:name', (req, res) => {
   const p = backups.backupPath(req.params.name);

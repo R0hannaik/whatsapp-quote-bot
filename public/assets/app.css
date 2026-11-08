@@ -284,3 +284,7 @@ table.data tr:hover td { background: #fcfcfd; }
 .timeline .ev.buyer::before { background: var(--blue); }
 .pay-badge { display: block; margin-top: 6px; cursor: pointer; font-size: 12.5px; white-space: nowrap; }
 button.badge.pay-badge:hover { filter: brightness(.97); }
+.offsite-box { margin-bottom: 18px; }
+.offsite-grid { display: grid; grid-template-columns: 1fr 1.6fr; gap: 20px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
+.offsite-grid .sub { margin-top: 6px; }
+@media (max-width: 700px) { .offsite-grid { grid-template-columns: 1fr; } }

@@ -104,6 +104,10 @@ async function pollStatus() {
         : st === 'disabled' ? `<span><b>WhatsApp is disabled</b> (WA_DISABLED=1). The dashboard works but nothing is sent.</span>`
         : `<span>⏳ <b>Connecting to WhatsApp…</b> ${esc(s.whatsapp.lastError || '')}</span><button class="btn btn-light btn-sm" data-open-conn>Details</button>`;
       alert.querySelector('[data-open-conn]')?.addEventListener('click', openConnectionModal);
+    } else if (s.backupProblem) {
+      alert.classList.remove('hidden');
+      alert.innerHTML = `<span>⚠️ <b>Backups need attention:</b> ${esc(s.backupProblem)}</span><button class="btn btn-light btn-sm" id="goBackups">Open Settings</button>`;
+      $('#goBackups').onclick = () => switchTab('settings');
     } else alert.classList.add('hidden');
     const pc = $('#pendingCount');
     const od = s.payments?.overdue?.n || 0;
@@ -821,12 +825,13 @@ async function loadSettings() {
       ${txt('order_keywords', 'Order words → hand over to you', 'When a buyer who just got a quote writes one of these (e.g. “confirm”, “book”, “PO”), the bot stays quiet and flags it in Orders &amp; Decisions.', true)}
       <div class="help" style="margin-top:-6px">⚠️ Reminders are messages the bot starts on its own, which WhatsApp watches more closely than replies. Keep the bot on a separate number.</div></div>
     <div class="card card-pad" style="grid-column:1/-1"><h3>Database backups</h3>
-      <p class="muted" style="margin-top:-6px">A copy of everything — chemicals, rates, templates, groups, orders and settings — is saved automatically every day.
+      <p class="muted" style="margin-top:-6px">A copy of everything — chemicals, rates, templates, groups, orders, payments and settings — is saved automatically every day, and checked before it's kept.
         The WhatsApp login is not included; after restoring a backup, just scan the QR again.</p>
-      <div class="grid3">${num('backup_hour_ist', 'Daily backup time (hour, India time)', '0–23. Default 3 = 3 AM.')}${num('backup_keep_days', 'Keep last … daily backups', 'Older ones are deleted automatically.')}
+      <div id="offsiteBox" class="offsite-box"></div>
+      <div class="grid3">${num('offsite_every_hours', 'Off-site copy every … hours', '0 = off. Default 1 = hourly.')}${num('backup_hour_ist', 'Daily backup time (hour, India time)', '0–23. Default 3 = 3 AM.')}${num('backup_keep_days', 'Keep last … daily backups', 'Older ones are deleted automatically.')}
         <div class="field"><label>&nbsp;</label><button type="button" class="btn btn-dark btn-sm" id="backupNow">Back up now</button></div></div>
       <div class="table-wrap" style="max-height:300px;border:1px solid var(--line);border-radius:12px"><table class="data"><thead><tr><th>Backup</th><th>Size</th><th>Created</th><th></th></tr></thead><tbody id="backupRows"></tbody></table></div>
-      <p class="muted" style="font-size:14px;margin-bottom:0">💡 Download a backup now and then and keep it somewhere else (Google Drive, your laptop). Backups stored on the server don't help if the server itself is lost.</p></div>
+      <p class="muted" style="font-size:14px;margin-bottom:0">💡 Backups listed here are stored on this server. With the off-site encrypted backup set up, a lost or hacked server can always be recovered — keep your backup passphrase in two safe places.</p></div>
     <div style="grid-column:1/-1;display:flex;justify-content:flex-end"><button class="btn btn-amber" type="submit">${ICON.save} Save Settings</button></div>
   </form>`;
   $('#setForm').onsubmit = guard(async e => {
@@ -841,10 +846,27 @@ async function loadSettings() {
   });
   $('#openConn').onclick = openConnectionModal;
   const fmtSize = n => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+  const ago = iso => { if (!iso) return 'never'; const m = Math.round((Date.now() - Date.parse(iso)) / 60000); return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`; };
   const loadBackups = guard(async () => {
-    const { items } = await api('GET', '/api/backups');
+    const { items, offsite: o, health: h, problem } = await api('GET', '/api/backups');
+    $('#offsiteBox').innerHTML = `
+      ${problem ? `<div class="alert-bar" style="margin-bottom:12px">⚠️ <span>${esc(problem)}</span></div>` : ''}
+      <div class="offsite-grid">
+        <div><span class="flabel">Database health</span>${h.liveCheck ? (h.liveCheck.ok ? '<span class="badge b-green">✓ Healthy</span>' : '<span class="badge b-red">Problem</span>') : '<span class="badge b-gray">Not checked yet</span>'}
+          <div class="sub">Checked ${ago(h.liveCheck?.at)} · every backup is verified before it's kept</div>
+          <button type="button" class="btn btn-light btn-sm" id="dbCheck" style="margin-top:8px">Check now</button></div>
+        <div><span class="flabel">Off-site encrypted backup</span>
+          ${o.configured ? `<span class="badge ${o.lastError && !o.lastSuccess ? 'b-red' : 'b-green'}">🔒 ${o.everyHours ? `Every ${o.everyHours} h` : 'Paused'} → ${esc(o.bucket)}</span>
+            <div class="sub">Last upload ${ago(o.lastSuccess)}${o.lastError ? ` · <span style="color:var(--red)">last attempt failed: ${esc(o.lastError)}</span>` : ''}</div>
+            <div class="sub">Restore drill: ${o.lastTest ? (o.lastTest.ok ? `✓ passed ${ago(o.lastTest.at)}` : `<span style="color:var(--red)">failed ${ago(o.lastTest.at)} — ${esc(o.lastTest.error)}</span>`) : 'not run yet'}</div>
+            <div class="chips" style="margin-top:8px"><button type="button" class="btn btn-dark btn-sm" id="offsiteNow">Upload now</button><button type="button" class="btn btn-light btn-sm" id="offsiteTest">Run restore drill</button></div>`
+          : `<span class="badge b-amber">Not set up</span><div class="sub">${o.problem ? esc(o.problem) + ' · ' : ''}Backups are only on this computer/server. Set up an encrypted off-site copy — see <b>DEPLOY.md → Off-site backups</b>.</div>`}</div>
+      </div>`;
+    $('#dbCheck').onclick = guard(async () => { const r = await api('POST', '/api/backups/check'); toast(r.ok ? 'Database is healthy' : 'Database check found a problem', !r.ok); loadBackups(); });
+    $('#offsiteNow')?.addEventListener('click', guard(async e => { e.target.disabled = true; e.target.textContent = 'Uploading…'; try { const r = await api('POST', '/api/backups/offsite'); toast(`Encrypted backup uploaded (${Math.round(r.size / 1024)} KB)`); } finally { loadBackups(); } }));
+    $('#offsiteTest')?.addEventListener('click', guard(async e => { e.target.disabled = true; e.target.textContent = 'Testing…'; try { const r = await api('POST', '/api/backups/offsite/test'); toast(r.ok ? `Restore drill passed — ${r.counts.chemicals} chemicals, ${r.counts.enquiries} enquiries, ${r.counts.orders} orders` : `Restore drill FAILED: ${r.error}`, !r.ok); } finally { loadBackups(); } }));
     $('#backupRows').innerHTML = items.length ? items.map(b => `<tr><td class="mono" style="font-size:13.5px">${esc(b.name)} ${b.manual ? '<span class="badge b-blue">manual</span>' : ''}</td>
-      <td>${fmtSize(b.size)}</td><td>${fmtTime(b.created)}</td>
+      <td>${fmtSize(b.size)} ${b.verified ? '<span class="badge b-green" title="Integrity checked, SHA-256 recorded">✓ verified</span>' : ''}</td><td>${fmtTime(b.created)}</td>
       <td style="white-space:nowrap"><a class="btn btn-light btn-sm" href="/api/backups/${encodeURIComponent(b.name)}" download>Download</a>
         <button type="button" class="link-danger" title="Delete" data-del-backup="${esc(b.name)}">×</button></td></tr>`).join('')
       : '<tr><td colspan="4" class="empty">No backups yet — the first one is made at the daily backup time, or press “Back up now”.</td></tr>';

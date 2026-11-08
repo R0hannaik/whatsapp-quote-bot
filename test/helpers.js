@@ -74,3 +74,49 @@ export const CHEMS = [
   { id: 4, name: 'Monosodium Glutamate', alias_list: ['msg', 'm.s.g.'], unit: 'kg', gst: 5, manufacturer: 'MEIHUA', packaging: '25 kgs Bag', status: 'Limited', origin_rates: [], price: 120 },
   { id: 5, name: 'Isopropyl Alcohol', alias_list: ['ipa', 'isopropyl alcohol', 'isopropanol'], unit: 'kg', gst: 18, packaging: '160 kg Drum', status: 'In Stock', origin_rates: [], price: 102 },
 ];
+
+/** A tiny stand-in for S3: stores objects in memory, checks signatures/MD5, and records every request. */
+export async function startFakeS3({ bucket = 'qb-backups', accessKeyId = 'AKIATEST' } = {}) {
+  const http = await import('node:http');
+  const crypto = await import('node:crypto');
+  const objects = new Map();
+  const requests = [];
+  const server = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      const url = new URL(req.url, 'http://x');
+      const [, b, ...rest] = url.pathname.split('/');
+      const key = rest.map(decodeURIComponent).join('/');
+      const body = Buffer.concat(chunks);
+      requests.push({ method: req.method, key, headers: req.headers, query: url.search });
+      const auth = req.headers.authorization || '';
+      if (!auth.startsWith('AWS4-HMAC-SHA256') || !auth.includes(`Credential=${accessKeyId}/`)) { res.writeHead(403); return res.end('<Error><Code>AccessDenied</Code></Error>'); }
+      if (b !== bucket) { res.writeHead(404); return res.end('<Error><Code>NoSuchBucket</Code></Error>'); }
+      if (req.method === 'DELETE') { res.writeHead(403); return res.end('<Error><Code>AccessDenied</Code></Error>'); }
+      if (req.method === 'PUT') {
+        if (req.headers['content-md5'] !== crypto.createHash('md5').update(body).digest('base64')) { res.writeHead(400); return res.end('<Error><Code>BadDigest</Code></Error>'); }
+        const meta = Object.fromEntries(Object.entries(req.headers).filter(([k]) => k.startsWith('x-amz-meta-')));
+        objects.set(key, { body, meta, lastModified: new Date().toISOString() });
+        res.writeHead(200); return res.end();
+      }
+      if (req.method === 'GET' && url.searchParams.get('list-type') === '2') {
+        const prefix = url.searchParams.get('prefix') || '';
+        const items = [...objects.entries()].filter(([k]) => k.startsWith(prefix));
+        res.writeHead(200, { 'Content-Type': 'application/xml' });
+        return res.end(`<?xml version="1.0"?><ListBucketResult><IsTruncated>false</IsTruncated>${items.map(([k, o]) =>
+          `<Contents><Key>${k}</Key><LastModified>${o.lastModified}</LastModified><Size>${o.body.length}</Size></Contents>`).join('')}</ListBucketResult>`);
+      }
+      if (req.method === 'GET' && objects.has(key)) {
+        const o = objects.get(key);
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream', ...o.meta });
+        return res.end(o.body);
+      }
+      res.writeHead(404); res.end('<Error><Code>NoSuchKey</Code></Error>');
+    });
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const endpoint = `http://127.0.0.1:${server.address().port}`;
+  return { server, endpoint, objects, requests, bucket, accessKeyId, close: () => new Promise(r => server.close(r)),
+    env: { BACKUP_S3_ENDPOINT: endpoint, BACKUP_S3_BUCKET: bucket, BACKUP_S3_ACCESS_KEY_ID: accessKeyId, BACKUP_S3_SECRET_ACCESS_KEY: 'secret-test-key', BACKUP_S3_REGION: 'ap-south-1', BACKUP_S3_PREFIX: 'quotebot/' } };
+}
