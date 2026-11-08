@@ -15,9 +15,19 @@ const backups = await import('./backup.js');
 const orders = await import('./orders.js');
 const { wa } = waMod;
 
+const demo = await import('./demo.js');
+const DEMO = demo.isDemo();
 db.ensureSecrets();
 db.seedIfEmpty();
+if (DEMO) {
+  // Demo: its own password (DEMO_PASSWORD, or generated once), always applied so the link you share keeps working.
+  const { password, generated } = demo.demoPassword(db.DATA_DIR, fs, path);
+  process.env.DASHBOARD_PASSWORD = password;
+  db.setSetting('password_hash', null);
+  if (!process.env.QB_QUIET) console.log(`\n  🎬 DEMO MODE — sample data, simulated WhatsApp. Login password: ${generated ? password : '(DEMO_PASSWORD)'}\n`);
+}
 initPassword();
+if (DEMO) { await demo.seedDemo(); demo.attachDemoSocket(); }
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUB = path.join(ROOT, 'public');
@@ -45,11 +55,15 @@ app.use((req, res, next) => {
 // CSRF protection: state-changing requests must come from this dashboard's own pages.
 app.use((req, res, next) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  // Browsers set Sec-Fetch-Site themselves and pages can't fake it — the most reliable check, and it keeps working behind
+  // tunnels/proxies that rewrite the Host header. Older clients without it fall back to comparing Origin with Host.
   const site = req.headers['sec-fetch-site'];
   const origin = req.headers.origin;
   const host = req.headers['x-forwarded-host'] && app.get('trust proxy') ? req.headers['x-forwarded-host'] : req.headers.host;
-  let sameOrigin = site ? site === 'same-origin' || site === 'none' : true;
-  if (origin) { try { sameOrigin = sameOrigin && new URL(origin).host === host; } catch { sameOrigin = false; } }
+  let sameOrigin;
+  if (site) sameOrigin = site === 'same-origin' || site === 'none';
+  else if (origin) { try { sameOrigin = new URL(origin).host === host; } catch { sameOrigin = false; } }
+  else sameOrigin = true;
   if (!sameOrigin) return res.status(403).json({ error: 'Cross-site request blocked' });
   if (req.headers['content-length'] > 0 && !req.is('application/json')) return res.status(415).json({ error: 'JSON only' });
   next();
@@ -115,10 +129,31 @@ app.get('/api/status', (_req, res) => {
     },
     stats: db.inquiryStats(),
     payments: orders.paymentStats(),
-    backupProblem: backups.backupProblem(),
+    backupProblem: DEMO ? null : backups.backupProblem(),
+    demo: DEMO,
   });
 });
 app.get('/api/activity', (_req, res) => res.json(waMod.activity.slice(0, 60)));
+// Things that would break the demo for the next viewer are switched off in demo mode.
+const notInDemo = (_req, res, next) => DEMO ? res.status(400).json({ error: 'Not available in the demo' }) : next();
+app.use(['/api/wa/restart', '/api/wa/logout', '/api/settings/password', '/api/settings/logout-all', '/api/join/token', '/api/backups/offsite'], notInDemo);
+
+/* demo chat (demo mode only) */
+app.get('/api/demo/chat', (req, res) => {
+  if (!DEMO) return res.status(404).json({ error: 'Not found' });
+  const jid = String(req.query.jid || '');
+  res.json({ groups: demo.DEMO_GROUPS.map(g => ({ jid: g.jid, name: g.name, members: g.members, auto_reply: !!db.getGroup(g.jid)?.auto_reply })),
+    messages: demo.chat.filter(m => !jid || m.jid === jid) });
+});
+app.post('/api/demo/message', wrap(async (req, res) => {
+  if (!DEMO) return res.status(404).json({ error: 'Not found' });
+  res.json(await demo.demoMessage(req.body || {}));
+}));
+app.post('/api/demo/reset', wrap(async (_req, res) => {
+  if (!DEMO) return res.status(404).json({ error: 'Not found' });
+  await demo.seedDemo({ force: true }); demo.attachDemoSocket(); res.json({ ok: true });
+}));
+
 app.post('/api/wa/restart', wrap(async (_req, res) => { await waMod.restartWhatsApp(); res.json({ ok: true }); }));
 app.post('/api/wa/logout', wrap(async (_req, res) => res.json({ ok: true, ...(await waMod.logoutWhatsApp()) })));
 
@@ -327,7 +362,7 @@ app.use((err, _req, res, _next) => { if (!err.status || err.status >= 500) conso
 export { app };
 
 // Start the web server and WhatsApp only when run directly (`npm start`), not when imported by the tests.
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isMain = process.env.QB_START === '1' || (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url));
 if (isMain) {
   const PORT = Number(process.env.PORT || 3000);
   const HOST = process.env.HOST || '127.0.0.1';   // only this computer by default; set HOST=0.0.0.0 to open to the network
@@ -335,7 +370,7 @@ if (isMain) {
     console.log(`\n  ✔ Dashboard running on http://localhost:${PORT}${HOST === '127.0.0.1' ? '  (this computer only)' : `  (listening on ${HOST})`}\n`);
     if (HOST !== '127.0.0.1' && HOST !== 'localhost') console.log('  ⚠  The dashboard is reachable from other devices. Use HTTPS (a reverse proxy) before exposing it to the internet.\n');
   });
-  waMod.startWhatsApp().catch(e => { console.error('[wa] failed to start:', e); wa.status = 'disconnected'; wa.lastError = e.message; });
+  if (!DEMO) waMod.startWhatsApp().catch(e => { console.error('[wa] failed to start:', e); wa.status = 'disconnected'; wa.lastError = e.message; });
   waMod.startInviteRotation();
   backups.startBackupSchedule();
   waMod.startPaymentReminders();

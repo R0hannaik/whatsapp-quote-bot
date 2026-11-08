@@ -288,3 +288,20 @@ button.badge.pay-badge:hover { filter: brightness(.97); }
 .offsite-grid { display: grid; grid-template-columns: 1fr 1.6fr; gap: 20px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
 .offsite-grid .sub { margin-top: 6px; }
 @media (max-width: 700px) { .offsite-grid { grid-template-columns: 1fr; } }
+
+/* demo */
+.demo-bar { background: #eef2ff; border-color: var(--blue-line); color: #1e3a8a; }
+.demo-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 22px; align-items: start; }
+.demo-phone { max-width: none; margin-top: 0; }
+.demo-phone .phone-body { height: 560px; overflow-y: auto; min-height: 0; }
+.demo-compose { display: flex; gap: 10px; align-items: center; padding: 10px 12px; background: #f0f2f5; border-top: 1px solid #d6d3cf; }
+.demo-compose textarea { flex: 1; resize: none; min-height: 42px; max-height: 120px; }
+.demo-compose .check { font-size: 13px; white-space: nowrap; color: var(--ink-2); }
+.bubble .quoted { background: rgba(0,0,0,.05); border-left: 3px solid #2f8a5a; border-radius: 6px; padding: 6px 8px; margin-bottom: 6px; font-size: 13px; color: var(--ink-2); }
+.bubble.typing { display: inline-flex; gap: 4px; padding: 12px 14px; }
+.bubble.typing span { width: 7px; height: 7px; border-radius: 50%; background: #7d8a85; animation: blink 1.2s infinite; }
+.bubble.typing span:nth-child(2) { animation-delay: .2s; } .bubble.typing span:nth-child(3) { animation-delay: .4s; }
+@keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+#dWhat { margin-top: 12px; line-height: 2; }
+@media (max-width: 1000px) { .demo-grid { grid-template-columns: 1fr; } .demo-phone .phone-body { height: 460px; } }
+.demo-bar b { color: #1e3a8a; }

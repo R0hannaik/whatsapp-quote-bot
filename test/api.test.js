@@ -69,7 +69,12 @@ describe('security headers & cross-site protection', () => {
   });
   test('requests from another website are blocked even with a valid cookie', async () => {
     assert.equal((await call('POST', '/api/groups/all-off', {}, { headers: { Origin: 'https://evil.example', 'Sec-Fetch-Site': 'cross-site' } })).status, 403);
-    assert.equal((await call('PUT', '/api/settings', { business_name: 'x' }, { headers: { Origin: 'https://evil.example' } })).status, 403);
+    // behind a tunnel/proxy the Host the app sees can differ from the address in the browser: trust Sec-Fetch-Site
+    assert.equal((await call('POST', '/api/groups/all-off', {}, { headers: { Origin: 'https://quiet-river-1234.trycloudflare.com', 'Sec-Fetch-Site': 'same-origin' } })).status, 200);
+    assert.equal((await call('POST', '/api/groups/all-off', {}, { headers: { Origin: 'https://quiet-river-1234.trycloudflare.com', 'Sec-Fetch-Site': 'same-site' } })).status, 403);
+    // older browsers without Sec-Fetch-Site: fall back to Origin vs Host
+    assert.equal((await call('POST', '/api/groups/all-off', {}, { headers: { Origin: 'https://evil.example', 'Sec-Fetch-Site': '' } })).status, 403);
+    assert.equal((await call('PUT', '/api/settings', { business_name: 'x' }, { headers: { Origin: 'https://evil.example', 'Sec-Fetch-Site': '' } })).status, 403);
   });
   test('non-JSON form posts are refused', async () => {
     assert.equal((await call('POST', '/api/groups/all-off', 'a=1', { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } })).status, 415);

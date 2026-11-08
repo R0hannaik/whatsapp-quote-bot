@@ -64,7 +64,7 @@ const TAB_ACTIONS = {
   orders: () => `<a class="btn btn-light" href="/api/inquiries.csv" download>${ICON.dl} Export CSV</a>`,
   payments: () => `<button class="btn btn-dark" data-act="new-order">${ICON.plus} New Order</button>`,
 };
-const LOADERS = { chemicals: loadChemicals, groups: loadGroups, templates: loadTemplates, orders: loadOrders, payments: loadPayments, join: loadJoin, settings: loadSettings };
+const LOADERS = { demo: loadDemoChat, chemicals: loadChemicals, groups: loadGroups, templates: loadTemplates, orders: loadOrders, payments: loadPayments, join: loadJoin, settings: loadSettings };
 
 function switchTab(tab) {
   state.tab = tab;
@@ -95,9 +95,19 @@ async function pollStatus() {
     const account = s.whatsapp.me?.id ?? null;
     if (account !== prevAccount && (account || st === 'logged_out') && ['groups', 'join'].includes(state.tab)) guard(LOADERS[state.tab])();
     $('#waPill').dataset.status = st;
-    $('#waPillText').textContent = st === 'open' && s.whatsapp.me ? `Connected · +${(s.whatsapp.me.id || '').split('@')[0]}` : WA_TEXT[st] || st;
+    $('#waPillText').textContent = s.demo ? 'Simulated WhatsApp (demo)' : st === 'open' && s.whatsapp.me ? `Connected · +${(s.whatsapp.me.id || '').split('@')[0]}` : WA_TEXT[st] || st;
     const alert = $('#connAlert');
-    if (st !== 'open') {
+    $('#demoTab').classList.toggle('hidden', !s.demo);
+    if (s.demo) {
+      alert.classList.remove('hidden');
+      alert.className = 'alert-bar demo-bar';
+      if (!alert.dataset.demo) {
+        alert.dataset.demo = 1;
+        alert.innerHTML = `<span>🎬 <b>Demo</b> — sample data and a simulated WhatsApp; nothing is sent to real WhatsApp. Try <b>💬 Demo Chat</b>: type as a buyer and watch the bot reply.</span>
+          <button class="btn btn-dark btn-sm" id="goDemo">Open Demo Chat</button>`;
+        $('#goDemo').onclick = () => switchTab('demo');
+      }
+    } else if (st !== 'open') {
       alert.classList.remove('hidden');
       alert.innerHTML = ['qr', 'logged_out', 'qr_expired'].includes(st)
         ? `<span>📱 <b>WhatsApp is not linked.</b> Link the bot's WhatsApp number to start quoting in groups.</span><button class="btn btn-dark btn-sm" data-open-conn>Link WhatsApp</button>`
@@ -889,6 +899,101 @@ function applyBrand() {
   document.title = `${n} · Quote Bot`;
 }
 
+/* =========================================================== DEMO CHAT (demo mode only) */
+const DEMO_SAMPLES = [
+  ['Ask a rate', 'PA 2 ton Bhiwandi rate urgent chahiye'],
+  ['Several products', 'Need rates:\n1. PA Korea 2 MT\n2. MA China 5 MT\n3. IPA 20 drums\n4. DOP 1 tanker'],
+  ['Negotiate', 'MA last rate kya hai? 10 MT'],
+  ['Place the order ↩', 'ok confirm karo, dispatch kal', true],
+  ['Follow-up question', 'payment terms kya hai?'],
+  ['Seller post (ignored)', 'PA Korea available with us @ 104/kg'],
+  ['Chit-chat (ignored)', 'Good morning all 🙏'],
+];
+state.demo = { jid: null, name: 'Rakesh (Client)', phone: '919811122233', lastPoll: 0 };
+
+async function loadDemoChat() {
+  const data = await api('GET', `/api/demo/chat${state.demo.jid ? `?jid=${encodeURIComponent(state.demo.jid)}` : ''}`);
+  if (!state.demo.jid) { state.demo.jid = (data.groups.find(g => g.auto_reply) || data.groups[0]).jid; return loadDemoChat(); }
+  const v = $('#view-demo');
+  if (!v.dataset.ready) {
+    v.innerHTML = `<div class="demo-grid">
+      <div class="card card-pad">
+        <h3 style="margin-top:0">Try the bot</h3>
+        <p class="muted" style="margin-top:-6px">You are a buyer in a WhatsApp group. Send a message and the real bot logic answers — exactly as it would on WhatsApp.</p>
+        <div class="field"><label>Group</label><select class="input" id="dGroup"></select><div class="help" id="dGroupHelp"></div></div>
+        <div class="grid2"><div class="field"><label>Your name</label><input class="input" id="dName"></div>
+          <div class="field"><label>Your number</label><input class="input" id="dPhone"></div></div>
+        <span class="flabel">Quick messages</span>
+        <div class="chips" id="dSamples" style="gap:8px"></div>
+        <div class="tip" style="margin-top:18px">👀 After trying a few messages, see where they land:
+          <b>Orders &amp; Decisions</b> (every enquiry; “Awaiting Owner” when a buyer wants to order),
+          <b>Payments</b> (record an order → automatic payment reminders), and <b>Groups Monitor → Live Bot Activity</b>.
+          <div style="margin-top:10px"><button class="btn btn-light btn-sm" id="dReset">↺ Reset demo data</button></div></div>
+      </div>
+      <div>
+        <div class="phone demo-phone"><div class="phone-head"><div class="av">👥</div><div><b id="dTitle"></b><small id="dSub"></small></div></div>
+          <div class="phone-body" id="dChat"></div>
+          <form class="demo-compose" id="dForm"><label class="check" title="Swipe-reply to the bot's last message"><input type="checkbox" id="dReply"> ↩ reply to bot</label>
+            <textarea class="input" id="dText" rows="1" placeholder="Type a message as the buyer…"></textarea><button class="btn btn-green" id="dSend">Send</button></form>
+        </div>
+        <div id="dWhat" class="analysis"></div>
+      </div></div>`;
+    v.dataset.ready = 1;
+    $('#dName').value = state.demo.name; $('#dPhone').value = state.demo.phone;
+    $('#dName').oninput = e => { state.demo.name = e.target.value; };
+    $('#dPhone').oninput = e => { state.demo.phone = e.target.value; };
+    $('#dGroup').onchange = e => { state.demo.jid = e.target.value; loadDemoChat(); };
+    $('#dSamples').innerHTML = DEMO_SAMPLES.map(([l, t, r], k) => `<button type="button" class="preset" data-sample="${k}" title="${esc(t)}">${esc(l)}</button>`).join('');
+    $('#dSamples').onclick = e => {
+      const b = e.target.closest('[data-sample]'); if (!b) return;
+      const [, t, reply] = DEMO_SAMPLES[Number(b.dataset.sample)];
+      $('#dText').value = t; $('#dReply').checked = !!reply; $('#dText').focus();
+    };
+    $('#dText').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#dForm').requestSubmit(); } });
+    $('#dForm').onsubmit = guard(async e => {
+      e.preventDefault();
+      const text = $('#dText').value.trim(); if (!text) return;
+      const lastBot = [...state.demo.messages || []].reverse().find(m => m.from === 'bot');
+      const replyToId = $('#dReply').checked ? lastBot?.id : null;
+      $('#dSend').disabled = true; $('#dText').value = ''; $('#dReply').checked = false;
+      // show the buyer's message and a typing indicator straight away
+      state.demo.messages = [...(state.demo.messages || []), { id: 'pending', from: 'buyer', name: state.demo.name, text, at: new Date().toISOString(), quotedId: replyToId }];
+      renderDemoChat(true);
+      try {
+        const r = await api('POST', '/api/demo/message', { jid: state.demo.jid, name: state.demo.name, phone: state.demo.phone, text, replyToId });
+        const what = r.activity.map(a => `<span class="badge ${ACT_CLASS[a.result] || 'b-gray'}">${a.result === 'replied' ? '✅ Bot replied' : a.result === 'flagged' ? '🧑‍💼 Handed to you' : a.result === 'unmatched' ? '❓ Not in your list' : '🤫 Bot stayed quiet'}</span> <span class="muted" style="font-size:14px">${esc(a.detail)}</span>`);
+        $('#dWhat').innerHTML = what.length ? what.join('<br>') : '';
+      } finally { $('#dSend').disabled = false; await loadDemoChat(); }
+    });
+    $('#dReset').onclick = guard(async () => {
+      if (!await confirmBox('Reset demo data?', 'Enquiries, orders, payments and this chat go back to the sample data. Chemicals and templates you edited are kept.', 'Reset', false)) return;
+      await api('POST', '/api/demo/reset'); state.demo.jid = null; $('#view-demo').dataset.ready = ''; toast('Demo data reset'); switchTab('demo');
+    });
+    clearInterval(state.demo.timer);
+    state.demo.timer = setInterval(() => { if (state.tab === 'demo' && !$('#modalRoot').innerHTML && !$('#dSend').disabled) guard(loadDemoChat)(); }, 4000);
+  }
+  const g = data.groups.find(x => x.jid === state.demo.jid);
+  $('#dGroup').innerHTML = data.groups.map(x => `<option value="${esc(x.jid)}" ${x.jid === state.demo.jid ? 'selected' : ''}>${esc(x.name)} ${x.auto_reply ? '· bot ON' : '· bot OFF'}</option>`).join('');
+  $('#dGroupHelp').innerHTML = g.auto_reply ? 'Auto-reply is ON here.' : '⚠️ Auto-reply is OFF in this group, so the bot stays quiet — switch it on in Groups Monitor to see it reply.';
+  $('#dTitle').textContent = g.name; $('#dSub').textContent = `${g.members} members · simulated`;
+  const changed = JSON.stringify(data.messages.map(m => m.id)) !== JSON.stringify((state.demo.messages || []).map(m => m.id));
+  state.demo.messages = data.messages;
+  if (changed) renderDemoChat(false);
+}
+function renderDemoChat(typing) {
+  const msgs = state.demo.messages || [];
+  const byId = Object.fromEntries(msgs.map(m => [m.id, m]));
+  const t = iso => new Date(iso).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+  $('#dChat').innerHTML = (msgs.length ? msgs.map(m => {
+    const q = m.quotedId && byId[m.quotedId];
+    return `<div class="bubble ${m.from === 'bot' ? 'out' : ''}">${m.from === 'buyer' ? `<div class="who">${esc(m.name)}</div>` : ''}
+      ${q ? `<div class="quoted"><b>${q.from === 'bot' ? 'Quote Bot' : esc(q.name)}</b><br>${esc(q.text.replace(/[*_~]|━+/g, '').replace(/\s+/g, ' ').slice(0, 90))}${q.text.length > 90 ? '…' : ''}</div>` : ''}
+      ${waFormat(m.text)}<div class="meta">${t(m.at)}${m.from === 'bot' ? ' <span class="ticks">✓✓</span>' : ''}</div></div>`;
+  }).join('') : '<div class="skip-note">No messages yet — pick a quick message on the left, or type your own.</div>')
+    + (typing ? '<div class="bubble out typing"><span></span><span></span><span></span></div>' : '');
+  $('#dChat').scrollTop = $('#dChat').scrollHeight;
+}
+
 /* =========================================================== PAYMENTS */
 /** Read-only payment status for an enquiry row; the order itself is the one place payment is changed. */
 function paymentBadge(i, today = istToday()) {
@@ -1070,5 +1175,5 @@ async function openPaymentOrderModal(id, fromInquiry = null) {
   await pollStatus();
   setInterval(pollStatus, 3000);
   const start = location.hash.slice(1);
-  switchTab(LOADERS[start] ? start : 'chemicals');
+  switchTab(LOADERS[start] && (start !== 'demo' || state.status?.demo) ? start : state.status?.demo ? 'demo' : 'chemicals');
 })();

@@ -6,3 +6,4 @@ data
 test
 *.md
 !README.md
+demo-data

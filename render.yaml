@@ -1,0 +1,20 @@
+# One-click DEMO on Render (free plan): Render → New → Blueprint → pick this repo.
+# Runs in demo mode: sample data + simulated WhatsApp. Never connects to a real WhatsApp number and holds no real data.
+# Free plan notes: sleeps after 15 min without visitors (first visit then takes ~1 min), and demo data resets on restart.
+services:
+  - type: web
+    name: quotebot-demo
+    runtime: docker
+    plan: free
+    region: singapore          # closest Render region to India
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: DEMO_MODE
+        value: "1"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DEMO_PASSWORD     # the password you give the client (min 8 characters) — Render asks for it
+        sync: false
+      - key: DEMO_CONTACT_PHONE
+        sync: false
