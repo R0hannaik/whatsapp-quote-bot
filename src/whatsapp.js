@@ -9,9 +9,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   DATA_DIR, getGroup, listGroups, upsertLiveGroup, markGroupsLeft, patchGroup, incrementQuotes,
-  createInquiry, getSettings, addCustomGroup, setCurrentAccount,
+  createInquiry, getSettings, addCustomGroup, setCurrentAccount, getTemplates,
 } from './db.js';
 import { planReplies } from './bot.js';
+import { normalize, hasPhrase } from './parser.js';
+import { findRecentInquiry, flagInquiry } from './db.js';
 
 const AUTH_DIR = path.join(DATA_DIR, 'wa-auth');
 const logger = pino({ level: process.env.WA_LOG_LEVEL || 'warn' });
@@ -88,6 +90,7 @@ export async function startWhatsApp() {
       wa.lastError = null;
       wa.me = { id: jidNormalizedUser(sock.user?.id), lid: sock.user?.lid, name: sock.user?.name || sock.user?.verifiedName || '' };
       setCurrentAccount(wa.me.id);   // show this number's groups (a different number won't see the old ones)
+      setTimeout(() => runPaymentReminders().catch(e => console.warn('[pay] reminder run failed:', e.message)), 30000).unref?.();
       console.log('[wa] connected as', wa.me.id);
       syncGroups().catch(e => console.warn('[wa] group sync failed:', e.message));
     }
@@ -227,6 +230,16 @@ export async function joinByInvite(link) {
 }
 
 /* ------------------------------------------------------------------ messages */
+/** Is this message a reply (swipe-reply) to something the bot sent? */
+function isReplyToBot(msg) {
+  const c = normalizeMessageContent(msg.message);
+  const ctx = c?.extendedTextMessage?.contextInfo || c?.imageMessage?.contextInfo || c?.documentMessage?.contextInfo;
+  if (!ctx?.stanzaId) return false;
+  if (sentIds.has(ctx.stanzaId)) return true;
+  const me = [wa.me?.id, wa.me?.lid].filter(Boolean);
+  return !!ctx.participant && me.some(j => areJidsSameUser(ctx.participant, j));
+}
+
 function textOf(msg) {
   const c = normalizeMessageContent(msg.message);
   if (!c) return '';
@@ -298,8 +311,26 @@ export async function handleMessage(msg) {
   const ts = Number(msg.messageTimestamp?.toNumber ? msg.messageTimestamp.toNumber() : msg.messageTimestamp || 0) * 1000;
   if (ts && Date.now() - ts > (Number(s.ignore_older_than_sec) || 120) * 1000) return log('skipped', 'old message (arrived after a reconnect)');
 
+  // ---- Steps 3–4: the buyer answers a quote (order / question) → hand over to the owner, don't auto-quote ----
+  const msgKey = { id: k.id, remoteJid: rawJid, participant: k.participant, fromMe: !!k.fromMe };
+  const repliedToBot = isReplyToBot(msg);
+  const recent = findRecentInquiry(jid, sender.jid);
+  const norm = normalize(text);
+  const orderWords = String(s.order_keywords || '').split(',').map(w => w.trim()).filter(Boolean).some(w => hasPhrase(norm, w));
+  if (orderWords && (repliedToBot || recent)) {
+    const target = recent || createInquiry({ group_jid: jid, group_name: group.name, sender_jid: sender.jid, sender_name: sender.name,
+      sender_phone: sender.phone, message: text, msg_key: msgKey, intent: 'order', status: 'Awaiting Owner', history_text: 'Order message (reply to an earlier quote)' });
+    flagInquiry(typeof target === 'object' ? target.id : target, { text, kind: 'order', msg_key: msgKey });
+    return log('flagged', `order request — waiting for you in Orders & Decisions (record the order there to start payment tracking)`);
+  }
+
   const plan = await planReplies(text, { senderName: sender.name });
   const a = plan.analysis;
+  const followUpWords = /\?|\b(kab|when|delivery|deliver|payment|terms|credit|advance|transport|freight|gst|bill|invoice|sample|coa|msds|tds|grade|purity|available|stock)\b/i;
+  if (recent && (!a.isRequest || !a.items.length) && (repliedToBot || (followUpWords.test(text) && Date.now() - Date.parse(recent.created_at.replace(' ', 'T') + 'Z') < 6 * 3600e3))) {
+    flagInquiry(recent.id, { text, kind: 'followup', msg_key: msgKey });
+    return log('flagged', `follow-up question on ${recent.chemical_name || 'an earlier quote'} — waiting for you in Orders & Decisions`);
+  }
   if (!a.isRequest) return log('skipped', a.skipReason === 'no request words found' && a.items.length
     ? `found ${a.items.map(i => i.chem.name).join(', ')} but no request words — add "rate", "need", "chahiye", a "?" or a quantity`
     : `not an enquiry (${a.skipReason})`);
@@ -347,7 +378,7 @@ export async function handleMessage(msg) {
 }
 
 /** Sends are serialised with a human-like delay and "typing…" indicator to keep the number safe. */
-function queueSend(jid, text, quotedMsg, s = getSettings()) {
+function queueSend(jid, text, quotedMsg, s = getSettings(), extra = {}) {
   const job = sendChain.then(async () => {
     if (wa.status !== 'open') return false;
     try {
@@ -355,13 +386,13 @@ function queueSend(jid, text, quotedMsg, s = getSettings()) {
       await wa.sock.sendPresenceUpdate('composing', jid).catch(() => {});
       await sleep(rand(min, max) * 1000);
       rememberSent(null, text);
-      const out = await wa.sock.sendMessage(jid, { text }, quotedMsg ? { quoted: quotedMsg } : {});
+      const out = await wa.sock.sendMessage(jid, { text, ...extra }, quotedMsg ? { quoted: quotedMsg } : {});
       rememberSent(out?.key?.id);
       await wa.sock.sendPresenceUpdate('paused', jid).catch(() => {});
       return true;
     } catch (e) {
       lastSendError = e.message;
-      console.warn('[wa] send failed:', e);
+      if (!process.env.QB_QUIET) console.warn('[wa] send failed:', e);
       return false;
     }
   });
@@ -420,4 +451,57 @@ export function startInviteRotation() {
       }
     }
   }, 20000);
+}
+
+/* ------------------------------------------------------------------ payment reminders */
+import { remindersDue, markReminderSent, markReminderFailed, reminderVars, hourIST, getOrder } from './orders.js';
+import { render } from './quote.js';
+
+/** The reminder text for an order (also used by the dashboard preview). */
+export function reminderText(order, template = getTemplates().reminder) {
+  return render(template, reminderVars(order));
+}
+
+/** Send one order's reminder in its chat: as a reply to the buyer's order message, tagging them in groups. */
+export async function sendPaymentReminder(orderOrId, { manual = false } = {}) {
+  const o = typeof orderOrId === 'object' ? orderOrId : getOrder(orderOrId);
+  if (!o) throw new Error('Order not found');
+  if (wa.status !== 'open') throw new Error('WhatsApp is not connected');
+  const text = reminderText(o);
+  const quoted = o.msg_key && o.msg_key.remoteJid === o.chat_jid
+    ? { key: o.msg_key, message: { conversation: o.order_message || '' } } : null;
+  const extra = o.chat_type === 'group' && o.customer_jid && text.includes('@') ? { mentions: [o.customer_jid] } : {};
+  const s = getSettings();
+  const sent = await queueSend(o.chat_jid, text, quoted, s, extra);
+  const chatName = o.chat_name || o.chat_jid;
+  if (!sent) {
+    markReminderFailed(o.id, lastSendError || 'send failed');
+    logActivity({ chat: o.chat_jid, chatName, sender: o.customer_name, text: `Payment reminder · order #${o.id}`, result: 'error', detail: lastSendError || 'send failed' });
+    if (manual) throw new Error(`Could not send: ${lastSendError || 'send failed'}`);
+    return null;
+  }
+  logActivity({ chat: o.chat_jid, chatName, sender: o.customer_name, text: `Payment reminder · order #${o.id}`, result: 'replied', detail: `payment reminder #${(o.reminders_sent || 0) + 1} sent` });
+  return markReminderSent(o.id, { manual });
+}
+
+let reminderRunning = false;
+/** Send all reminders that are due today (from the configured hour). Safe to call often. */
+export async function runPaymentReminders({ now = Date.now() } = {}) {
+  const s = getSettings();
+  if (!s.payment_reminders_enabled || wa.status !== 'open' || reminderRunning) return { sent: 0 };
+  if (hourIST(now) < (Number(s.reminder_hour_ist) || 0)) return { sent: 0 };
+  reminderRunning = true;
+  let sent = 0;
+  try {
+    for (const o of remindersDue()) {
+      if (wa.status !== 'open') break;
+      if (await sendPaymentReminder(o)) sent++;
+      await sleep(rand(3, 8) * 1000 * (process.env.QB_FAST ? 0 : 1));   // space them out
+    }
+  } finally { reminderRunning = false; }
+  return { sent };
+}
+
+export function startPaymentReminders() {
+  setInterval(() => runPaymentReminders().catch(e => console.warn('[pay] reminder run failed:', e.message)), 10 * 60000).unref();
 }

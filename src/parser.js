@@ -120,7 +120,7 @@ function detectOrigins(toks) {
   return [...out];
 }
 
-function hasPhrase(norm, phrase) {
+export function hasPhrase(norm, phrase) {
   const p = normalize(phrase);
   return p && new RegExp(`(^| )${escapeRe(p)}( |$)`).test(norm);
 }

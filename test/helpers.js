@@ -14,6 +14,7 @@ export function setupEnv(extra = {}) {
     DASHBOARD_PASSWORD: 'test-password-123',
     WA_LOG_LEVEL: 'silent',
     QB_QUIET: '1',                   // keep test output readable
+    QB_FAST: '1',                    // no waiting between payment reminders
     ...extra,
   });
   delete process.env.CONTACT_PHONE;
@@ -49,12 +50,15 @@ export function fakeSocket({ unlink = 'ack' } = {}) {
 
 let seq = 0;
 /** A WhatsApp group message as Baileys delivers it. */
-export function waMessage(text, { group = '120363000000000001@g.us', from = '919000000001@s.whatsapp.net', fromMe = false, name = 'Rakesh', ageSec = 0, id } = {}) {
+export function waMessage(text, { group = '120363000000000001@g.us', from = '919000000001@s.whatsapp.net', fromMe = false, name = 'Rakesh', ageSec = 0, id, replyTo } = {}) {
   return {
     key: { remoteJid: group, id: id || `MSG${++seq}`, participant: fromMe ? undefined : from, fromMe },
     pushName: name,
     messageTimestamp: Math.floor(Date.now() / 1000) - ageSec,
-    message: text == null ? null : { conversation: text },
+    // replyTo = { id, participant }: a swipe-reply to an earlier message (e.g. the bot's quote)
+    message: text == null ? null : replyTo
+      ? { extendedTextMessage: { text, contextInfo: { stanzaId: replyTo.id, participant: replyTo.participant } } }
+      : { conversation: text },
   };
 }
 

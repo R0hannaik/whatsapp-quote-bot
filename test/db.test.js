@@ -101,9 +101,9 @@ describe('chemicals', () => {
 });
 
 describe('templates', () => {
-  test('all four template modes have defaults, save and reset', () => {
+  test('all template modes have defaults, save and reset', () => {
     const t = db.getTemplates();
-    assert.deepEqual(Object.keys(t), ['quote', 'deal', 'multi', 'multi_item']);
+    assert.deepEqual(Object.keys(t), ['quote', 'deal', 'multi', 'multi_item', 'reminder']);
     db.saveTemplate('multi_item', 'X {n}');
     assert.equal(db.getTemplates().multi_item, 'X {n}');
     db.resetTemplate('multi_item');

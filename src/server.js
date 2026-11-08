@@ -9,9 +9,10 @@ const express = (await import('express')).default;
 const db = await import('./db.js');
 const { initPassword, changePassword, login, logout, logoutEverywhere, requireAuth, isAuthed } = await import('./auth.js');
 const { planReplies, describe, invalidateCatalogue } = await import('./bot.js');
-const { PRESETS, DEFAULT_TEMPLATES, TEMPLATE_VARIABLES, MULTI_VARIABLES } = await import('./presets.js');
+const { PRESETS, DEFAULT_TEMPLATES, TEMPLATE_VARIABLES, MULTI_VARIABLES, REMINDER_VARIABLES } = await import('./presets.js');
 const waMod = await import('./whatsapp.js');
 const backups = await import('./backup.js');
+const orders = await import('./orders.js');
 const { wa } = waMod;
 
 db.ensureSecrets();
@@ -113,6 +114,7 @@ app.get('/api/status', (_req, res) => {
       autoReplyOn: groups.filter(g => g.auto_reply && !g.left_group).length,
     },
     stats: db.inquiryStats(),
+    payments: orders.paymentStats(),
   });
 });
 app.get('/api/activity', (_req, res) => res.json(waMod.activity.slice(0, 60)));
@@ -158,7 +160,7 @@ app.delete('/api/groups/:jid', wrap((req, res) => { db.deleteGroup(req.params.ji
 
 /* templates */
 app.get('/api/templates', (_req, res) => res.json({ templates: db.getTemplates(), defaults: DEFAULT_TEMPLATES, presets: PRESETS,
-  variables: TEMPLATE_VARIABLES, multiVariables: MULTI_VARIABLES }));
+  variables: TEMPLATE_VARIABLES, multiVariables: MULTI_VARIABLES, reminderVariables: REMINDER_VARIABLES }));
 app.put('/api/templates/:mode', wrap((req, res) => {
   if (!db.TEMPLATE_MODES.includes(req.params.mode)) throw new Error('Unknown template');
   if (!String(req.body?.body || '').trim()) throw new Error('Template cannot be empty');
@@ -232,6 +234,10 @@ app.put('/api/settings', wrap((req, res) => {
     if (typeof def === 'number') { v = Number(v); if (!Number.isFinite(v) || v < 0) throw new Error(`Invalid value for ${k}`); }
     if (typeof def === 'boolean') v = !!v;
     if (typeof def === 'string') { v = String(v); if (v.length > 2000) throw new Error(`${k} is too long`); }
+    if (k === 'reminder_hour_ist' && (v > 23 || !Number.isInteger(v))) throw new Error('Reminder time must be a whole hour from 0 to 23');
+    if (k === 'default_credit_days' && (v < 1 || v > 365)) throw new Error('Credit days must be between 1 and 365');
+    if (k === 'reminder_repeat_days' && (v < 1 || v > 30)) throw new Error('Repeat every 1–30 days');
+    if (k === 'reminder_days_before_due' && v > 30) throw new Error('First reminder can be at most 30 days before the due date');
     if (k === 'backup_hour_ist' && (v > 23 || !Number.isInteger(v))) throw new Error('Backup time must be a whole hour from 0 to 23');
     if (k === 'backup_keep_days' && (v < 1 || v > 365)) throw new Error('Keep between 1 and 365 backups');
     if (k === 'multi_reply_style' && !['combined', 'separate'].includes(v)) throw new Error('multi_reply_style must be combined or separate');
@@ -241,6 +247,52 @@ app.put('/api/settings', wrap((req, res) => {
   invalidateCatalogue();
   res.json({ settings: db.getSettings() });
 }));
+/* orders & payments */
+const phoneJid = p => { let d = String(p || '').replace(/\D/g, ''); if (d.length === 10) d = '91' + d; return d.length >= 11 && d.length <= 15 ? `${d}@s.whatsapp.net` : null; };
+function orderInput(body, existing) {
+  const b = { ...body };
+  delete b.payment_status; delete b.reminders_sent; delete b.last_reminder_date; delete b.next_reminder_date; delete b.history;
+  const inq = b.inquiry_id ? db.getInquiry(Number(b.inquiry_id)) : null;
+  if (b.inquiry_id && !inq) throw new Error('Enquiry not found');
+  if (inq && !existing) {   // fill in who/where from the enquiry
+    b.customer_name ??= inq.sender_name; b.customer_phone ??= inq.sender_phone; b.customer_jid ??= inq.sender_jid;
+    b.chat_jid ??= inq.group_jid; b.chat_name ??= inq.group_name; b.msg_key ??= inq.msg_key; b.order_message ??= inq.message;
+    b.product ??= inq.chemical_name || inq.requested_text; b.quantity ??= inq.final_qty || inq.quantity; b.rate ??= inq.final_rate;
+  }
+  if (b.chat_type === 'private') {   // remind in the buyer's private chat
+    const jid = phoneJid(b.customer_phone);
+    if (!jid) throw new Error("Enter the buyer's WhatsApp number for private-chat reminders");
+    b.chat_jid = jid; b.chat_name = `Private chat · ${b.customer_phone}`;
+    if (!existing || existing.chat_jid !== jid) { b.msg_key = null; }
+  } else if (b.chat_type === 'group' && b.chat_jid && !b.chat_name) {
+    b.chat_name = db.getGroup(b.chat_jid)?.name || b.chat_jid;
+  }
+  return b;
+}
+app.get('/api/orders', (req, res) => res.json({ items: orders.listOrders({ status: String(req.query.status || 'Pending'), q: req.query.q }), stats: orders.paymentStats(), today: orders.todayIST() }));
+app.post('/api/orders', wrap((req, res) => res.json(orders.createOrder(orderInput(req.body || {})))));
+app.patch('/api/orders/:id', wrap((req, res) => {
+  const cur = orders.getOrder(Number(req.params.id)); if (!cur) throw new Error('Order not found');
+  res.json(orders.updateOrder(cur.id, orderInput(req.body || {}, cur)));
+}));
+app.post('/api/orders/:id/status', wrap((req, res) => res.json(orders.setPaymentStatus(Number(req.params.id), req.body?.status))));
+app.post('/api/orders/:id/remind', wrap(async (req, res) => res.json(await waMod.sendPaymentReminder(Number(req.params.id), { manual: true }))));
+app.get('/api/orders/:id/preview', wrap((req, res) => {
+  const o = orders.getOrder(Number(req.params.id)); if (!o) throw new Error('Order not found');
+  res.json({ text: waMod.reminderText(o) });
+}));
+app.delete('/api/orders/:id', wrap((req, res) => { orders.deleteOrder(Number(req.params.id)); res.json({ ok: true }); }));
+// Template editor preview with a sample order
+app.post('/api/reminder-preview', wrap((req, res) => {
+  const body = String(req.body?.body ?? db.getTemplates().reminder);
+  if (body.length > 5000) throw new Error('Template is too long');
+  const today = orders.todayIST();
+  const sample = { id: 0, chat_type: 'group', customer_name: 'Rakesh Shah', customer_jid: '919820000000@s.whatsapp.net', product: 'Phthalic Anhydride',
+    quantity: '2 MT', amount: 256000, invoice_no: 'PC/2026/1182', order_date: orders.addDays(today, -28), credit_days: 30,
+    due_date: orders.addDays(today, 2), reminders_sent: 0 };
+  res.json({ text: waMod.reminderText(sample, body) });
+}));
+
 /* backups */
 app.get('/api/backups', (_req, res) => res.json({ items: backups.listBackups(), hour: db.getSetting('backup_hour_ist'), keep: db.getSetting('backup_keep_days') }));
 app.post('/api/backups', wrap(async (_req, res) => res.json(await backups.createBackup({ manual: true }))));
@@ -272,6 +324,7 @@ if (isMain) {
   waMod.startWhatsApp().catch(e => { console.error('[wa] failed to start:', e); wa.status = 'disconnected'; wa.lastError = e.message; });
   waMod.startInviteRotation();
   backups.startBackupSchedule();
+  waMod.startPaymentReminders();
 
   // Clean shutdown (server restarts, `docker compose down`, deploys): finish writes and close WhatsApp properly.
   let stopping = false;

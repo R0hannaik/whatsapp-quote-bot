@@ -40,6 +40,18 @@ DEFAULT_TEMPLATES.multi_item = `*{n}. {product_name}*
 📦 {packaging} · 📍 {location} · ✅ {status}
 {requirement}`;
 
+// Payment reminder for placed orders (sent in the chat where the order was placed).
+DEFAULT_TEMPLATES.reminder = `{mention}
+*{business_name}* — Payment Reminder 🔔
+Dear {customer_name},
+This is a gentle reminder for your order dated {order_date}:
+📦 {item}
+💰 *Amount:* {amount}
+🧾 *Invoice:* {invoice_no}
+📅 {due_status}
+Kindly arrange the payment at the earliest. Please ignore if already paid. 🙏
+📞 {contact_phone}`;
+
 export const PRESETS = {
   quote: [
     { id: 'minimal', label: '⚡ Minimalist Broker', body: `*{product_name}*
@@ -107,6 +119,29 @@ Availability: {status}
 {requirement}` },
 ];
 
+PRESETS.reminder = [
+  { id: 'minimal', label: '⚡ Short', body: `{mention}
+🔔 Payment reminder: {product} ({order_date}) — *{amount}*
+{due_status}
+📞 {contact_phone}` },
+  { id: 'standard', label: '🏷️ Gentle', body: DEFAULT_TEMPLATES.reminder },
+  { id: 'corporate', label: '📋 Formal', body: `{mention}
+*{business_name}* — Payment Reminder
+${DIV}
+Dear {customer_name},
+As per our records, payment for the following order is pending:
+*Order date:* {order_date}
+*Invoice no.:* {invoice_no}
+*Material:* {product}
+*Quantity:* {quantity}
+*Amount:* {amount}
+*Credit period:* {credit_days} days
+📅 {due_status}
+${DIV}
+_Request you to release the payment at the earliest. If already paid, kindly share the payment details so we can update our records._
+*{business_name}* | 📞 {contact_phone}` },
+];
+
 export const TEMPLATE_VARIABLES = [
   { key: 'product_name', hint: 'Chemical name + short code' },
   { key: 'rate_details', hint: 'Rate line or rates by origin' },
@@ -131,5 +166,21 @@ export const MULTI_VARIABLES = [
   { key: 'unavailable', hint: 'Items not in your list — "Will check & revert" (hidden if none)', for: 'multi' },
   { key: 'deal_note', hint: 'Shown only when the buyer is negotiating', for: 'multi' },
   { key: 'n', hint: 'Product number 1, 2, 3…', for: 'multi_item' },
+];
+export const REMINDER_VARIABLES = [
+  { key: 'mention', hint: 'Tags the buyer in the group (hidden in private chats)' },
+  { key: 'customer_name', hint: 'Buyer name' },
+  { key: 'item', hint: 'Material + quantity, e.g. Phthalic Anhydride · 2 MT' },
+  { key: 'product', hint: 'Material / order description' },
+  { key: 'quantity', hint: 'Quantity' },
+  { key: 'amount', hint: 'Order amount, e.g. ₹2,56,000' },
+  { key: 'order_date', hint: 'Order date' },
+  { key: 'due_date', hint: 'Payment due date' },
+  { key: 'due_status', hint: '"due in 2 days" / "due today" / "4 days overdue"' },
+  { key: 'invoice_no', hint: 'Invoice number (hidden if empty)' },
+  { key: 'credit_days', hint: 'Credit period in days' },
+  { key: 'reminder_no', hint: 'Which reminder this is: 1, 2, 3…' },
+  { key: 'business_name', hint: 'Your business name' },
+  { key: 'contact_phone', hint: 'Your phone' },
 ];
 export const DEAL_NOTE = '🤝 _For volume / best pricing, our team will call you to finalise the rates._';

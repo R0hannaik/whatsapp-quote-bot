@@ -62,8 +62,9 @@ const TAB_ACTIONS = {
   chemicals: () => `<button class="btn btn-dark" data-act="add-chem">${ICON.plus} Add Chemical</button>`,
   groups: () => `<button class="btn btn-green" data-act="sync">${ICON.sync} Sync Live Groups</button>`,
   orders: () => `<a class="btn btn-light" href="/api/inquiries.csv" download>${ICON.dl} Export CSV</a>`,
+  payments: () => `<button class="btn btn-dark" data-act="new-order">${ICON.plus} New Order</button>`,
 };
-const LOADERS = { chemicals: loadChemicals, groups: loadGroups, templates: loadTemplates, orders: loadOrders, join: loadJoin, settings: loadSettings };
+const LOADERS = { chemicals: loadChemicals, groups: loadGroups, templates: loadTemplates, orders: loadOrders, payments: loadPayments, join: loadJoin, settings: loadSettings };
 
 function switchTab(tab) {
   state.tab = tab;
@@ -78,6 +79,7 @@ $('#tabActions').addEventListener('click', e => {
   const a = e.target.closest('[data-act]')?.dataset.act;
   if (a === 'add-chem') openChemModal(null);
   if (a === 'sync') syncGroups();
+  if (a === 'new-order') openPaymentOrderModal(null);
 });
 $('#logoutBtn').onclick = async () => { await api('POST', '/api/logout'); location.href = '/login'; };
 $('#waPill').onclick = () => openConnectionModal();
@@ -104,6 +106,8 @@ async function pollStatus() {
       alert.querySelector('[data-open-conn]')?.addEventListener('click', openConnectionModal);
     } else alert.classList.add('hidden');
     const pc = $('#pendingCount');
+    const od = s.payments?.overdue?.n || 0;
+    $('#overdueCount').textContent = od; $('#overdueCount').classList.toggle('hidden', !od);
     const pending = s.stats.negotiating;
     pc.textContent = pending; pc.classList.toggle('hidden', !pending);
     if (connModalOpen) renderConnectionModal();
@@ -339,7 +343,7 @@ async function loadGroups() {
   renderGroupRows();
   loadActivity();
 }
-const ACT_CLASS = { replied: 'b-green', skipped: 'b-gray', unmatched: 'b-amber', error: 'b-red' };
+const ACT_CLASS = { replied: 'b-green', skipped: 'b-gray', unmatched: 'b-amber', error: 'b-red', flagged: 'b-violet' };
 async function loadActivity() {
   const el = $('#actRows'); if (!el) return;
   const items = await api('GET', '/api/activity');
@@ -404,7 +408,7 @@ function openAddGroupModal() {
 }
 
 /* =========================================================== TEMPLATES */
-const TPL_MODES = ['quote', 'deal', 'multi', 'multi_item'];
+const TPL_MODES = ['quote', 'deal', 'multi', 'multi_item', 'reminder'];
 const EDITOR_LABEL = { multi: 'Message (wraps the product list)', multi_item: 'Product block — repeated for every product' };
 const WRAPPER_VARS = ['business_name', 'contact_phone', 'sender_name', 'date', 'customer_location'];
 const editorHtml = (target, label) => `<div class="editor" data-editor="${target}">
@@ -425,7 +429,7 @@ async function loadTemplates() {
   if (!v.dataset.ready) {
     v.innerHTML = `<div class="card">
       <div class="tpl-top"><span class="label-caps">Template Mode:</span>
-        <div class="seg" id="tplMode"><button data-mode="quote" class="active">📦 Price Quotation</button><button data-mode="deal">🤝 Deal &amp; Negotiation</button><button data-mode="multi">🧾 Multi-Product</button></div>
+        <div class="seg" id="tplMode"><button data-mode="quote" class="active">📦 Price Quotation</button><button data-mode="deal">🤝 Deal &amp; Negotiation</button><button data-mode="multi">🧾 Multi-Product</button><button data-mode="reminder">🔔 Payment Reminder</button></div>
         <div class="spacer"></div>
         <button class="btn btn-amber" id="tplSave">${ICON.save} Save Template</button><button class="btn btn-light" id="tplReset">Reset Default</button></div>
       <div class="tpl-grid">
@@ -499,7 +503,13 @@ function setTplMode(mode, keepMessage = false) {
   $$('#tplMode button').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
   $('#tplPresets').innerHTML = state.tpl.presets[mode].map(p => `<button class="preset ${state.tplPreset[mode] === p.id ? 'active' : ''}" data-preset="${p.id}">${esc(p.label)}</button>`).join('');
   $('#tplEditors').innerHTML = mode === 'multi' ? editorHtml('multi', EDITOR_LABEL.multi) + editorHtml('multi_item', EDITOR_LABEL.multi_item) : editorHtml(mode);
-  $('#tplTip').innerHTML = mode === 'multi'
+  const isRem = mode === 'reminder';
+  $('.phone-body .bubble:not(.out)', $('#view-templates'))?.classList.toggle('hidden', isRem);
+  $('#tplSample').classList.toggle('hidden', isRem);
+  $('#tplTip').innerHTML = isRem
+    ? `💡 <b>Payment reminders</b> are sent for Pending orders in the chat where the order was placed — first on day ${(state.settings?.default_credit_days || 30) - (state.settings?.reminder_days_before_due ?? 2)}, then every ${state.settings?.reminder_repeat_days || 2} days until you mark the order Paid (timing in Settings).
+       <code>{mention}</code> tags the buyer in groups and is hidden in private chats. <code>{due_status}</code> changes by itself: “due in 2 days”, “due today”, “4 days overdue”. Lines with an empty variable (e.g. no invoice number) are hidden.`
+    : mode === 'multi'
     ? `💡 <b>How multi-product replies work:</b> when one message asks for 2 or more products (e.g. <i>“PA 2 MT, MA China 5 MT, IPA 20 drums”</i>), the bot sends <b>one</b> message. The <b>Product block</b> is filled in for every product with its own quantity and origin, and all blocks go where you put <code>{items}</code>.
        <code>{unavailable}</code> lists anything not in your matrix as “Will check &amp; revert”, and <code>{deal_note}</code> appears only when the buyer is negotiating. Lines with an empty variable are hidden. Prefer one message per product? Change it in Settings.`
     : `💡 <b>Formatting Tip:</b> Use <code>*bold*</code> for product/rates and <code>_italic_</code> for notes. Any line whose variable is empty is hidden automatically — so when <code>{requirement}</code> is in your template and the customer doesn’t mention a quantity, that line simply disappears.
@@ -511,13 +521,15 @@ function setTplMode(mode, keepMessage = false) {
 function renderTplVars() {
   const f = state.tplFocus;
   let vars;
-  if (f === 'multi') vars = [...state.tpl.multiVariables.filter(x => x.for === 'multi'), ...state.tpl.variables.filter(x => WRAPPER_VARS.includes(x.key))];
+  if (f === 'reminder') vars = state.tpl.reminderVariables;
+  else if (f === 'multi') vars = [...state.tpl.multiVariables.filter(x => x.for === 'multi'), ...state.tpl.variables.filter(x => WRAPPER_VARS.includes(x.key))];
   else if (f === 'multi_item') vars = [...state.tpl.multiVariables.filter(x => x.for === 'multi_item'), ...state.tpl.variables];
   else vars = state.tpl.variables;
   $('#tplVars').innerHTML = vars.map(x => `<button class="var-chip" data-var="${x.key}" title="${esc(x.hint)}">+ {${x.key}}</button>`).join('');
-  $('#tplVarsHint').textContent = f === 'multi' ? 'For the message around the list' : f === 'multi_item' ? 'For each product block' : 'Substituted live per chemical';
+  $('#tplVarsHint').textContent = f === 'reminder' ? 'Filled in from each order' : f === 'multi' ? 'For the message around the list' : f === 'multi_item' ? 'For each product block' : 'Substituted live per chemical';
 }
 function setSampleMessage() {
+  if (state.tplMode === 'reminder') { preview(); return; }
   const codeOf = c => (c.alias_list.find(a => a.replace(/\./g, '').length <= 4) || c.name).replace(/\./g, '').toUpperCase();
   const c = state.chemicals.find(x => x.id === state.sampleChem);
   if (!c) return;
@@ -561,6 +573,13 @@ function wrapSelection(mark) {
   ta.dispatchEvent(new Event('input', { bubbles: true }));
 }
 const preview = debounce(guard(async () => {
+  if (state.tplMode === 'reminder') {
+    const r = await api('POST', '/api/reminder-preview', { body: state.tplDraft.reminder });
+    const now = new Date().toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+    $('#tplReplies').innerHTML = `<div class="bubble out">${waFormat(r.text)}<div class="meta">${now} <span class="ticks">✓✓</span></div></div>`;
+    $('#tplAnalysis').innerHTML = '<span class="faint" style="font-size:13.5px">Sample: order for Phthalic Anhydride, 2 MT, ₹2,56,000 — day 28 of 30.</span>';
+    return;
+  }
   const overrides = Object.fromEntries(TPL_MODES.map(m => [m, state.tplDraft[m]]).filter(([, v]) => typeof v === 'string'));
   const r = await api('POST', '/api/simulate', { message: state.sampleMsg, overrides, forceMode: state.tplMode });
   const now = new Date().toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
@@ -654,6 +673,7 @@ function openOrderModal(id) {
           <div class="field"><label>Final Qty</label><input class="input" id="oQty" value="${esc(i.final_qty || i.quantity || '')}" placeholder="2 MT"></div></div>
           <div class="field"><label>Notes (private)</label><textarea class="input" id="oNotes" rows="3" placeholder="Payment terms, delivery date, buyer details…">${esc(i.owner_notes || '')}</textarea></div>
           <button class="btn btn-dark btn-sm" id="oSave">Save decision</button>
+          <button class="btn btn-green btn-sm" id="oRecord" title="Saves the order and starts payment tracking & reminders">📦 Record order &amp; track payment</button>
         </div>
       </div>
       <hr style="border:0;border-top:1px solid var(--line);margin:24px 0">
@@ -662,7 +682,7 @@ function openOrderModal(id) {
           <div class="chips" style="margin-bottom:8px">${quick.map((q, k) => `<button class="btn btn-light btn-sm" data-quick="${k}">${q[0]}</button>`).join('')}</div>
           <textarea class="input" id="oMsg" rows="4" placeholder="Type a message… it will be sent quoting the customer's original message."></textarea>
           <div style="margin-top:10px"><button class="btn btn-green btn-sm" id="oSend" ${i.group_jid ? '' : 'disabled'}>Send in group</button></div></div>
-        <div><span class="flabel">History</span><div class="timeline">${i.history.map(h => `<div class="ev ${h.by}"><small>${fmtTime(h.at)} · ${h.by === 'bot' ? 'Bot' : 'You'}</small>${esc(h.text)}</div>`).join('')}</div></div>
+        <div><span class="flabel">History</span><div class="timeline">${i.history.map(timelineEvent).join('')}</div></div>
       </div>
     </div>
     <div class="modal-foot"><button class="link-danger" id="oDel" style="font-size:15px">Delete enquiry</button><div class="push"></div><button class="btn btn-light" data-close>Close</button></div>`, { size: 'lg' });
@@ -674,6 +694,7 @@ function openOrderModal(id) {
   };
   $$('[data-set]', m.el).forEach(b => b.onclick = guard(async () => { await save({ status: b.dataset.set }); toast(`Marked as ${b.dataset.set}`); openOrderModal(i.id); }));
   $('#oSave', m.el).onclick = guard(async () => { await save({}); toast('Decision saved'); openOrderModal(i.id); });
+  $('#oRecord', m.el).onclick = () => openPaymentOrderModal(null, { ...i, final_rate: $('#oRate', m.el).value, final_qty: $('#oQty', m.el).value });
   $$('[data-quick]', m.el).forEach(b => b.onclick = () => { $('#oMsg', m.el).value = quick[Number(b.dataset.quick)][1](); });
   $('#oSend', m.el).onclick = guard(async () => {
     const text = $('#oMsg', m.el).value.trim(); if (!text) throw new Error('Type a message first');
@@ -779,6 +800,14 @@ async function loadSettings() {
       <button type="button" class="btn btn-danger-soft btn-sm" id="logoutAll">Log out all devices</button>
       <h3 style="margin-top:22px">WhatsApp account</h3>
       <button type="button" class="btn btn-light btn-sm" id="openConn">Connection &amp; QR</button></div>
+    <div class="card card-pad" style="grid-column:1/-1"><h3>Orders &amp; payment reminders</h3>
+      ${chk('payment_reminders_enabled', '<b>Send payment reminders</b> for Pending orders (in the group or private chat where the order was placed)')}
+      <div class="grid3">${num('default_credit_days', 'Default credit days', 'Payment period for new orders.')}
+        ${num('reminder_days_before_due', 'First reminder … days before due', '2 → day 28 of 30.')}
+        ${num('reminder_repeat_days', 'Then repeat every … days', '2 = every other day, until Paid.')}
+        ${num('reminder_hour_ist', 'Send from (hour, India time)', '0–23. Default 11 = 11 AM.')}</div>
+      ${txt('order_keywords', 'Order words → hand over to you', 'When a buyer who just got a quote writes one of these (e.g. “confirm”, “book”, “PO”), the bot stays quiet and flags it in Orders &amp; Decisions.', true)}
+      <div class="help" style="margin-top:-6px">⚠️ Reminders are messages the bot starts on its own, which WhatsApp watches more closely than replies. Keep the bot on a separate number.</div></div>
     <div class="card card-pad" style="grid-column:1/-1"><h3>Database backups</h3>
       <p class="muted" style="margin-top:-6px">A copy of everything — chemicals, rates, templates, groups, orders and settings — is saved automatically every day.
         The WhatsApp login is not included; after restoring a backup, just scan the QR again.</p>
@@ -824,6 +853,169 @@ function applyBrand() {
   const n = state.settings?.business_name || 'Quote Bot';
   $('#brandName').textContent = n; $('#brandMark').textContent = n[0]?.toUpperCase() || 'Q';
   document.title = `${n} · Quote Bot`;
+}
+
+/* =========================================================== PAYMENTS */
+const WHO = { bot: 'Bot', owner: 'You', buyer: 'Buyer' };
+function timelineEvent(h) { return `<div class="ev ${esc(h.by)}"><small>${fmtTime(h.at)} · ${WHO[h.by] || esc(h.by)}</small>${esc(h.text)}</div>`; }
+const rupees = n => '₹' + Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const istToday = () => new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+const plusDays = (d, n) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + Number(n)); return x.toISOString().slice(0, 10); };
+const dayDiff = (a, b) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86400000);
+const fmtDay = d => d ? new Date(`${d}T00:00:00Z`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—';
+function dueBadge(o, today = istToday()) {
+  if (o.payment_status === 'Paid') return `<span class="badge b-green">Paid ${o.paid_date ? fmtDay(o.paid_date) : ''}</span>`;
+  const d = dayDiff(today, o.due_date);
+  if (d < 0) return `<span class="badge b-red">${-d} day${d === -1 ? '' : 's'} overdue</span>`;
+  if (d === 0) return '<span class="badge b-amber">Due today</span>';
+  return `<span class="badge ${d <= 7 ? 'b-amber' : 'b-gray'}">in ${d} day${d === 1 ? '' : 's'}</span>`;
+}
+state.payFilter = { status: 'Pending', q: '' };
+
+async function loadPayments() {
+  const qs = new URLSearchParams(state.payFilter);
+  const data = await api('GET', `/api/orders?${qs}`);
+  state.pay = data;
+  const v = $('#view-payments');
+  if (!v.dataset.ready) {
+    v.innerHTML = `<div class="stats" id="payStats" style="grid-template-columns:repeat(4,minmax(0,1fr))"></div>
+      <div class="card">
+        <div class="banner info">🔔 <div><b>Payment reminders:</b> for every Pending order the buyer gets a reminder in the chat where the order was placed
+          — first on <b>day ${(state.settings?.default_credit_days || 30) - (state.settings?.reminder_days_before_due ?? 2)}</b>, then every
+          <b>${state.settings?.reminder_repeat_days || 2} days</b> until you mark it <b>Paid</b>. Change the timing in Settings and the message in Reply Templates.</div></div>
+        <div class="toolbar"><div class="status-pills" id="payPills"></div><div class="spacer"></div>
+          <div class="search" style="max-width:340px">${ICON.search}<input class="input" id="paySearch" placeholder="Search buyer, product, invoice…"></div></div>
+        <div class="table-wrap"><table class="data"><thead><tr><th>Order date</th><th>Buyer &amp; chat</th><th>Material</th><th class="right">Amount</th><th>Due</th><th>Reminders</th><th>Payment</th><th></th></tr></thead>
+        <tbody id="payRows"></tbody></table></div></div>`;
+    v.dataset.ready = 1;
+    $('#payPills').onclick = e => { const b = e.target.closest('[data-pst]'); if (b) { state.payFilter.status = b.dataset.pst; loadPayments(); } };
+    $('#paySearch').oninput = debounce(e => { state.payFilter.q = e.target.value; loadPayments(); }, 300);
+    $('#payRows').addEventListener('change', guard(async e => {
+      const sel = e.target.closest('select[data-pay]'); if (!sel) return;
+      await api('POST', `/api/orders/${sel.dataset.pay}/status`, { status: sel.value });
+      toast(sel.value === 'Paid' ? 'Marked Paid — reminders stopped' : 'Marked Pending — reminders resumed'); loadPayments(); pollStatus();
+    }));
+    $('#payRows').addEventListener('click', e => { const id = e.target.closest('[data-open-order]')?.dataset.openOrder; if (id) openPaymentOrderModal(Number(id)); });
+  }
+  const st = data.stats;
+  $('#payStats').innerHTML = [
+    ['Outstanding', rupees(st.pending.amt), `${st.pending.n} pending order${st.pending.n === 1 ? '' : 's'}`, 'hl'],
+    ['Overdue', rupees(st.overdue.amt), `${st.overdue.n} order${st.overdue.n === 1 ? '' : 's'}`, st.overdue.n ? 'od' : ''],
+    ['Due in next 7 days', rupees(st.dueSoon.amt), `${st.dueSoon.n} order${st.dueSoon.n === 1 ? '' : 's'}`, ''],
+    ['Received this month', rupees(st.paidThisMonth.amt), `${st.paidThisMonth.n} paid`, ''],
+  ].map(([k, v, sub, c]) => `<div class="stat ${c}"><div class="k">${k}</div><div class="v">${v}</div><div class="sub">${sub}</div></div>`).join('');
+  $('#payPills').innerHTML = [['Pending', 'Pending'], ['Overdue', 'Overdue'], ['DueSoon', 'Due this week'], ['Paid', 'Paid'], ['all', 'All']]
+    .map(([k, l]) => `<button class="spill ${state.payFilter.status === k ? 'active' : ''}" data-pst="${k}">${l}</button>`).join('');
+  $('#payRows').innerHTML = data.items.length ? data.items.map(o => `<tr>
+    <td style="white-space:nowrap">${fmtDay(o.order_date)}${o.invoice_no ? `<div class="sub">${esc(o.invoice_no)}</div>` : ''}</td>
+    <td><div style="font-weight:600">${esc(o.customer_name || '—')}</div><div class="sub">${o.chat_type === 'group' ? '👥' : '💬'} ${esc(o.chat_name || o.chat_jid)}</div></td>
+    <td><div>${esc(o.product)}</div><div class="sub">${esc([o.quantity, o.rate].filter(Boolean).join(' · '))}</div></td>
+    <td class="right rate-big">${rupees(o.amount)}</td>
+    <td style="white-space:nowrap"><div>${fmtDay(o.due_date)}</div>${dueBadge(o, data.today)}</td>
+    <td style="white-space:nowrap"><div>${o.reminders_sent} sent</div><div class="sub">${o.payment_status === 'Paid' ? '—' : !o.reminders_enabled ? '⏸ paused' : o.next_reminder_date ? `next ${fmtDay(o.next_reminder_date)}` : '—'}</div>
+      ${o.last_error ? `<div class="sub" style="color:var(--red)" title="${esc(o.last_error)}">⚠ last attempt failed</div>` : ''}</td>
+    <td><select class="input status-select badge ${o.payment_status === 'Paid' ? 'b-green' : 'b-amber'}" data-pay="${o.id}">${['Pending', 'Paid'].map(x => `<option ${x === o.payment_status ? 'selected' : ''}>${x}</option>`).join('')}</select></td>
+    <td><button class="btn btn-light btn-sm" data-open-order="${o.id}">Open</button></td></tr>`).join('')
+    : `<tr><td colspan="8" class="empty">${state.payFilter.status === 'Pending' ? 'No pending payments. Record an order from <b>Orders &amp; Decisions → Open → 📦 Record order</b>, or use <b>+ New Order</b>.' : 'Nothing here.'}</td></tr>`;
+}
+
+/** Create (from an enquiry or from scratch) or edit an order. */
+async function openPaymentOrderModal(id, fromInquiry = null) {
+  if (!state.settings) state.settings = (await api('GET', '/api/settings')).settings;
+  const groups = state.groups?.length ? state.groups : (state.groups = await api('GET', '/api/groups').catch(() => []));
+  const o = id ? (await api('GET', `/api/orders?status=all`)).items.find(x => x.id === id) : null;
+  if (id && !o) return toast('Order not found', true);
+  const inq = fromInquiry;
+  const isNew = !o;
+  const v = o || {
+    customer_name: inq?.sender_name || '', customer_phone: inq?.sender_phone || '', product: inq?.chemical_name || inq?.requested_text || '',
+    quantity: inq?.final_qty || inq?.quantity || '', rate: inq?.final_rate || '', amount: '', invoice_no: '', order_date: istToday(),
+    credit_days: state.settings.default_credit_days || 30, reminders_enabled: true, notes: '',
+    chat_type: inq && !String(inq.group_jid || '').endsWith('@g.us') ? 'private' : 'group', chat_jid: inq?.group_jid || '', chat_name: inq?.group_name || '',
+  };
+  const groupOpts = groups.filter(g => g.jid.endsWith('@g.us') && !g.left_group);
+  const groupChoice = isNew && !inq
+    ? `<select class="input" id="poGroup">${groupOpts.length ? groupOpts.map(g => `<option value="${esc(g.jid)}">${esc(g.name)}</option>`).join('') : '<option value="">No groups — sync first, or use private chat</option>'}</select>`
+    : `<div class="input" style="background:var(--soft)">${esc(v.chat_type === 'group' ? v.chat_name || v.chat_jid : (inq?.group_name || 'the group'))}</div>`;
+  const m = openModal(`<div class="modal-head"><h3>${isNew ? '📦 Record Order' : `Order #${o.id} · ${esc(o.customer_name || '')}`}</h3><button class="x" data-close>×</button></div>
+    <form class="modal-body" id="poForm" autocomplete="off">
+      ${inq ? `<div class="wa-preview" style="margin-bottom:18px"><div class="bubble" style="max-width:100%;margin:0"><div class="who">${esc(inq.sender_name || '')} ${esc(inq.sender_phone || '')}</div>${waFormat(inq.message || '')}<div class="meta">${esc(inq.group_name || '')}</div></div></div>` : ''}
+      <div class="grid2">
+        <div class="field"><label>Buyer name</label><input class="input" name="customer_name" value="${esc(v.customer_name || '')}"></div>
+        <div class="field"><label>Buyer WhatsApp number</label><input class="input" name="customer_phone" value="${esc(v.customer_phone || '')}" placeholder="+91 98xxx xxxxx"></div>
+      </div>
+      <div class="grid3">
+        <div class="field" style="grid-column:span 2"><label>Material / description *</label><input class="input" name="product" value="${esc(v.product || '')}" required></div>
+        <div class="field"><label>Quantity</label><input class="input" name="quantity" value="${esc(v.quantity || '')}" placeholder="2 MT"></div>
+        <div class="field"><label>Rate</label><input class="input" name="rate" value="${esc(v.rate || '')}" placeholder="₹106 / kg + GST"></div>
+        <div class="field"><label>Order amount (₹) *</label><input class="input price-input" name="amount" type="number" min="1" step="0.01" value="${v.amount || ''}" required></div>
+        <div class="field"><label>Invoice no.</label><input class="input" name="invoice_no" value="${esc(v.invoice_no || '')}"></div>
+        <div class="field"><label>Order date</label><input class="input" type="date" name="order_date" value="${esc(v.order_date)}" max="${istToday()}"></div>
+        <div class="field"><label>Credit days</label><input class="input" type="number" min="1" max="365" name="credit_days" value="${v.credit_days}"></div>
+        <div class="field"><label>Due date</label><div class="input" id="poDue" style="background:var(--soft)"></div></div>
+      </div>
+      <div class="field"><label>Send payment reminders in</label>
+        <div class="seg" id="poChat"><button type="button" data-ct="group">👥 Group</button><button type="button" data-ct="private">💬 Private chat with buyer</button></div>
+        <div style="margin-top:10px" id="poGroupWrap">${groupChoice}</div>
+        <div class="help" id="poChatHelp"></div></div>
+      <label class="check" style="margin-bottom:8px"><input type="checkbox" name="reminders_enabled" ${v.reminders_enabled ? 'checked' : ''}> Send automatic payment reminders</label>
+      <div class="help" id="poSchedule" style="margin:0 0 16px"></div>
+      <div class="field"><label>Notes (private)</label><textarea class="input" name="notes" rows="2">${esc(v.notes || '')}</textarea></div>
+      ${o ? `<div class="grid2"><div><span class="flabel">Next reminder preview</span><div class="wa-preview"><div class="bubble out" style="max-width:100%;margin:0" id="poPreview">…</div></div></div>
+        <div><span class="flabel">History</span><div class="timeline">${o.history.map(timelineEvent).join('')}</div></div></div>` : ''}
+    </form>
+    <div class="modal-foot">
+      ${o ? `<button class="link-danger" id="poDel" style="font-size:15px">Delete</button>` : ''}<div class="push"></div>
+      ${o && o.payment_status === 'Pending' ? `<button class="btn btn-light" id="poRemind">🔔 Send reminder now</button><button class="btn btn-green" id="poPaid">✅ Mark Paid</button>` : ''}
+      ${o && o.payment_status === 'Paid' ? `<button class="btn btn-light" id="poUnpaid">Mark Pending again</button>` : ''}
+      <button class="btn btn-dark" id="poSave">${isNew ? 'Save order' : 'Save changes'}</button></div>`, { size: 'lg' });
+
+  const f = $('#poForm', m.el);
+  let chatType = v.chat_type || 'group';
+  const refresh = () => {
+    $$('#poChat button', m.el).forEach(b => b.classList.toggle('active', b.dataset.ct === chatType));
+    $('#poGroupWrap', m.el).classList.toggle('hidden', chatType !== 'group');
+    $('#poChatHelp', m.el).innerHTML = chatType === 'group'
+      ? 'The reminder is posted in this group as a reply to the buyer’s order message, tagging the buyer.'
+      : 'The reminder goes to the buyer’s own WhatsApp chat (uses the number above).';
+    const od = f.order_date.value || istToday(), cd = Number(f.credit_days.value) || 30;
+    const due = plusDays(od, cd);
+    $('#poDue', m.el).textContent = fmtDay(due);
+    const before = Number(state.settings.reminder_days_before_due ?? 2), every = Number(state.settings.reminder_repeat_days || 2);
+    let first = plusDays(od, cd - before); if (first < od) first = od;
+    if (o?.last_reminder_date || first < istToday()) first = o?.next_reminder_date || istToday();
+    $('#poSchedule', m.el).innerHTML = !f.reminders_enabled.checked ? '⏸ No automatic reminders for this order.'
+      : (o && o.payment_status === 'Paid') ? 'Paid — no reminders.'
+      : `🔔 ${o?.reminders_sent ? 'Next' : 'First'} reminder <b>${fmtDay(first)}</b> (from ${state.settings.reminder_hour_ist ?? 11}:00), then every ${every} day${every === 1 ? '' : 's'} until marked Paid.`;
+  };
+  $('#poChat', m.el).onclick = e => { const b = e.target.closest('[data-ct]'); if (b) { chatType = b.dataset.ct; refresh(); } };
+  f.addEventListener('input', refresh); f.addEventListener('change', refresh);
+  refresh();
+  if (o) api('GET', `/api/orders/${o.id}/preview`).then(r => { $('#poPreview', m.el).innerHTML = waFormat(r.text); }).catch(() => {});
+
+  $('#poSave', m.el).onclick = guard(async () => {
+    const body = {
+      customer_name: f.customer_name.value, customer_phone: f.customer_phone.value, product: f.product.value, quantity: f.quantity.value,
+      rate: f.rate.value, amount: f.amount.value, invoice_no: f.invoice_no.value, order_date: f.order_date.value, credit_days: f.credit_days.value,
+      reminders_enabled: f.reminders_enabled.checked, notes: f.notes.value, chat_type: chatType,
+    };
+    if (isNew && inq) body.inquiry_id = inq.id;
+    if (isNew && !inq && chatType === 'group') { body.chat_jid = $('#poGroup', m.el)?.value; if (!body.chat_jid) throw new Error('Choose a group, or switch to private chat'); }
+    if (!isNew && chatType === 'group' && o.chat_type !== 'group') throw new Error('This order was set up for a private chat — create a new order to remind in a group');
+    const saved = await api(isNew ? 'POST' : 'PATCH', isNew ? '/api/orders' : `/api/orders/${o.id}`, body);
+    m.close(); toast(isNew ? `Order #${saved.id} saved — payment tracking started` : 'Order updated');
+    if (state.tab === 'payments') loadPayments(); else if (state.tab === 'orders') loadOrders();
+    pollStatus();
+  });
+  $('#poPaid', m.el)?.addEventListener('click', guard(async () => { await api('POST', `/api/orders/${o.id}/status`, { status: 'Paid' }); m.close(); toast('Marked Paid — reminders stopped'); loadPayments(); pollStatus(); }));
+  $('#poUnpaid', m.el)?.addEventListener('click', guard(async () => { await api('POST', `/api/orders/${o.id}/status`, { status: 'Pending' }); m.close(); toast('Marked Pending — reminders resumed'); loadPayments(); pollStatus(); }));
+  $('#poRemind', m.el)?.addEventListener('click', guard(async () => {
+    const r = await api('POST', `/api/orders/${o.id}/remind`); toast(`Reminder #${r.reminders_sent} sent`); m.close(); loadPayments();
+  }));
+  $('#poDel', m.el)?.addEventListener('click', guard(async () => {
+    if (!await confirmBox('Delete order?', 'The order and its reminders are removed. This cannot be undone.', 'Delete')) return openPaymentOrderModal(o.id);
+    await api('DELETE', `/api/orders/${o.id}`); toast('Order deleted'); loadPayments(); pollStatus();
+  }));
 }
 
 /* =========================================================== boot */

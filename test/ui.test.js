@@ -147,6 +147,29 @@ describe('dashboard in a browser', { skip }, () => {
     assert.ok(await page.$('#backupRows a[download]'), 'download link shown');
   });
 
+  test('Record order from an enquiry → shows in Payments → mark Paid', async () => {
+    await tab('orders');
+    if (await page.$('[data-clear-batch]')) { await page.click('[data-clear-batch]'); await wait(400); }   // left filtered by an earlier test
+    await page.click('.spill[data-st=all]'); await wait(500);
+    await page.click('[data-open]'); await wait(300);
+    await page.click('#oRecord'); await wait(500);
+    assert.match(await text('.modal-head h3'), /Record Order/);
+    await page.type('input[name=amount]', '256000');
+    await page.click('#poSave'); await wait(700);
+    assert.match(await text('#toasts'), /payment tracking started/);
+    await tab('payments'); await wait(300);
+    assert.match(await text('#payRows'), /₹2,56,000/);
+    assert.match(await text('#payStats'), /Outstanding[\s\S]*₹2,56,000/i);
+    await page.select('select[data-pay]', 'Paid'); await wait(700);
+    assert.match(await text('#payRows'), /No pending payments/);
+  });
+
+  test('Payment Reminder template shows a live preview', async () => {
+    await tab('templates');
+    await page.click('#tplMode button[data-mode=reminder]'); await wait(800);
+    assert.match(await text('#tplReplies'), /Payment Reminder[\s\S]*₹2,56,000/);
+  });
+
   test('no JavaScript errors anywhere', () => assert.deepEqual(errors, []));
 
   test('log out', async () => {

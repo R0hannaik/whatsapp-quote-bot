@@ -117,6 +117,13 @@ export const SETTING_DEFAULTS = {
   reply_to_own_messages: false, // test mode: also answer messages typed on the bot's own phone
   ai_enabled: false,
   ai_model: 'claude-haiku-5-5',
+  // payment reminders for placed orders
+  payment_reminders_enabled: true,
+  default_credit_days: 30,
+  reminder_days_before_due: 2,    // first reminder on day 28 of 30
+  reminder_repeat_days: 2,        // then every other day until Paid
+  reminder_hour_ist: 11,          // send reminders from 11 AM India time
+  order_keywords: 'confirm, confirmed, book, booking, book karo, po, purchase order, place order, order confirm, order karo, lock, lock karo, dispatch, dispatch karo, deal done, done deal, proceed, go ahead, final kar do, pakka',
   backup_hour_ist: 3,             // daily database backup time (India time, 0–23)
   backup_keep_days: 14,           // how many daily backups to keep
 };
@@ -284,7 +291,7 @@ export const allAutoReplyOff = () => db.prepare('UPDATE groups SET auto_reply = 
 export const deleteGroup = jid => db.prepare('DELETE FROM groups WHERE account = ? AND jid = ?').run(currentAccount(), jid);
 
 /* ---------------- templates ---------------- */
-export const TEMPLATE_MODES = ['quote', 'deal', 'multi', 'multi_item'];
+export const TEMPLATE_MODES = ['quote', 'deal', 'multi', 'multi_item', 'reminder'];
 export function getTemplates() {
   const rows = Object.fromEntries(db.prepare('SELECT mode, body FROM templates').all().map(r => [r.mode, r.body]));
   return Object.fromEntries(TEMPLATE_MODES.map(m => [m, rows[m] ?? DEFAULT_TEMPLATES[m]]));
@@ -355,6 +362,26 @@ export function updateInquiry(id, patch, by = 'owner') {
   });
   return getInquiry(id);
 }
+/** The latest enquiry from this person in this chat that the bot answered (for follow-ups / orders). */
+export function findRecentInquiry(chatJid, senderJid, withinHours = 7 * 24) {
+  if (!chatJid || !senderJid) return null;
+  return hydrateInquiry(db.prepare(`SELECT * FROM inquiries WHERE group_jid = ? AND sender_jid = ?
+      AND status IN ('Quoted','Negotiating','Awaiting Owner','On Hold') AND created_at >= datetime('now', ?)
+    ORDER BY id DESC LIMIT 1`).get(chatJid, senderJid, `-${Number(withinHours)} hours`));
+}
+
+/** Hand an enquiry to the owner: status → Awaiting Owner, log the buyer's new message, remember it for replies. */
+export function flagInquiry(id, { text, kind, msg_key }) {
+  const cur = getInquiry(id);
+  if (!cur) return null;
+  const label = kind === 'order' ? '🛒 Wants to place an order' : '💬 Follow-up';
+  const history = [...cur.history, { at: new Date().toISOString(), by: 'buyer', text: `${label}: "${String(text).slice(0, 300)}"` }];
+  db.prepare(`UPDATE inquiries SET status = 'Awaiting Owner', history = @history, updated_at = datetime('now')
+      ${msg_key ? ', msg_key = @msg_key, message = @message' : ''}${kind === 'order' ? ", intent = 'order'" : ''} WHERE id = @id`)
+    .run({ id, history: JSON.stringify(history), ...(msg_key ? { msg_key: JSON.stringify(msg_key), message: String(text).slice(0, 4000) } : {}) });
+  return getInquiry(id);
+}
+
 export const deleteInquiry = id => db.prepare('DELETE FROM inquiries WHERE id = ?').run(id);
 
 export function inquiryStats() {

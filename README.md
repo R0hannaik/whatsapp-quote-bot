@@ -12,6 +12,7 @@ your rates matrix — plus a password-protected dashboard to run it.
 | **WhatsApp Groups Monitor** | Every group the bot's number is in: name & ID, type, members, quotes sent, and an **auto-reply toggle** (all OFF by default). *Sync Live Groups*, *Turn All OFF*, *+ Add Custom Group* (by group ID, phone number, or invite link). |
 | **WhatsApp Reply Templates** | *Price Quotation*, *Deal & Negotiation* and *Multi-Product* templates with presets, click-to-insert variables, bold/italic/mono toolbar and a live WhatsApp preview. Type any message in the preview bubble to see exactly what the bot would understand and reply. |
 | **Orders & Decisions** | Every enquiry the bot answered (and requests it couldn't match). **You** set the final status — Confirmed, Negotiating, On Hold, Rejected, Dispatched — with final rate, qty, private notes, history, and a box to reply in the group. CSV export. |
+| **Payments** | Orders you record (from an enquiry → *📦 Record order*, or *+ New Order*) with amount, invoice, order date and credit days. Pending/Paid, totals outstanding, overdue and due this week. The buyer gets a **payment reminder in the chat where the order was placed** (group — replying to their order message and tagging them — or private chat): first on **day 28** of 30, then **every other day until you mark it Paid**. Timing and wording are editable. |
 | **Group Join QR** | A QR code that **changes every 10 minutes**: the bot revokes the group's invite link and creates a new one, so old screenshots stop working. Includes a public page (no login) you can show on a screen or website. |
 | **Settings** | Business name / phone, reply delays, cooldowns, negotiation & seller-post keywords, optional AI fallback, password change, WhatsApp unlink. |
 
@@ -20,6 +21,7 @@ How the bot decides:
 - Recognises aliases, dotted codes (p.a.), joined words and typos (pthalic → Phthalic). Short codes like
   "PA"/"AA" need to be in capitals or next to a request word/quantity so Hindi words like "aa" don't trigger it.
 - Ignores seller posts ("available with us @ 104/kg"), greetings, long price lists, and backlog after a reconnect.
+- When a buyer **replies to a quote** with *confirm / book / PO / dispatch…* or asks a follow-up (*payment terms? delivery kab?*), the bot stays quiet and flags it for you in Orders & Decisions (status *Awaiting Owner*).
 - "last rate", "best price", "discount", "kam"… → **Deal & Negotiation** template (it never promises a lower price).
 - Asks for an origin ("Korea PA rate") → only that origin's rate is sent.
 - **Several products in one message** ("Need: 1. PA Korea 2 MT 2. MA China 5 MT 3. IPA 20 drums 4. DOP 1 tanker", or
@@ -93,7 +95,7 @@ Your part:
 ## Tests
 
 ```bash
-npm test            # everything (~1 min): 148 checks
+npm test            # everything (~1 min): 196 checks
 npm run test:quick  # just message reading, quotes, replies and database (a few seconds)
 ```
 
