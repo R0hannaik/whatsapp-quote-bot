@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check docker-compose.yml
-        run: DOMAIN=quotes.example.in docker compose config --quiet
+        run: cp .env.example .env && docker compose config --quiet   # real servers have their own .env
       - name: Build image
         run: docker build -t quotebot .
       - name: Start container and wait for it to be healthy
