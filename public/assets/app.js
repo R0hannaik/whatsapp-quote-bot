@@ -85,7 +85,7 @@ $('#logoutBtn').onclick = async () => { await api('POST', '/api/logout'); locati
 $('#waPill').onclick = () => openConnectionModal();
 
 /* =========================================================== status polling */
-const WA_TEXT = { open: 'WhatsApp connected', qr: 'Scan QR to link', connecting: 'Connecting…', logged_out: 'Logged out – relink', disconnected: 'Disconnected', disabled: 'WhatsApp disabled' };
+const WA_TEXT = { open: 'WhatsApp connected', qr: 'Scan QR to link', qr_expired: 'Not linked', connecting: 'Connecting…', logged_out: 'Logged out – relink', disconnected: 'Disconnected', disabled: 'WhatsApp disabled' };
 async function pollStatus() {
   try {
     const s = await api('GET', '/api/status');
@@ -99,7 +99,7 @@ async function pollStatus() {
     const alert = $('#connAlert');
     if (st !== 'open') {
       alert.classList.remove('hidden');
-      alert.innerHTML = st === 'qr' || st === 'logged_out'
+      alert.innerHTML = ['qr', 'logged_out', 'qr_expired'].includes(st)
         ? `<span>📱 <b>WhatsApp is not linked.</b> Link the bot's WhatsApp number to start quoting in groups.</span><button class="btn btn-dark btn-sm" data-open-conn>Link WhatsApp</button>`
         : st === 'disabled' ? `<span><b>WhatsApp is disabled</b> (WA_DISABLED=1). The dashboard works but nothing is sent.</span>`
         : `<span>⏳ <b>Connecting to WhatsApp…</b> ${esc(s.whatsapp.lastError || '')}</span><button class="btn btn-light btn-sm" data-open-conn>Details</button>`;
@@ -140,6 +140,8 @@ function confirmBox(title, text, okLabel = 'Confirm', danger = true) {
 /* =========================================================== WhatsApp connection */
 function openConnectionModal() {
   connModalOpen = true;
+  // Expired QR: opening this window means you're ready to scan, so fetch a fresh one straight away.
+  if (state.status?.whatsapp?.status === 'qr_expired') api('POST', '/api/wa/restart').catch(() => {});
   openModal(`<div class="modal-head"><h3>WhatsApp Connection</h3><button class="x" data-close>×</button></div><div class="modal-body" id="connBody"></div>
     <div class="modal-foot"><button class="btn btn-light" id="restartWa">Restart connection</button><div class="push"></div>
     <button class="btn btn-danger-soft" id="logoutWa">Unlink this number</button></div>`, { size: 'sm', onClose: () => { connModalOpen = false; } });
@@ -167,6 +169,11 @@ function renderConnectionModal() {
       <p><b>Number:</b> +${esc((w.me?.id || '').split('@')[0])}<br><b>Name:</b> ${esc(w.me?.name || '—')}<br>
       <b>Last group sync:</b> ${w.lastSync ? fmtTime(w.lastSync) : '—'}</p>
       <p class="muted" style="margin-bottom:0">The bot replies only in groups whose Auto-reply toggle is ON.</p>`;
+  } else if (w.status === 'qr_expired') {
+    body.innerHTML = `<p style="margin-top:0"><span class="badge b-gray">Not linked</span></p>
+      <p>The last QR code expired because it wasn't scanned. To save WhatsApp from being asked again and again, the bot waits until you're ready.</p>
+      <button class="btn btn-dark" id="newQr">Show a new QR code</button>`;
+    $('#newQr').onclick = guard(async () => { $('#newQr').disabled = true; $('#newQr').textContent = 'Getting a QR code…'; await api('POST', '/api/wa/restart'); });
   } else if (w.qr) {
     body.innerHTML = `<div class="qr-box"><img src="${w.qr}" alt="WhatsApp link QR"></div>
       <ol class="steps"><li>Open WhatsApp on the phone with the bot's number</li><li>Go to <b>Settings → Linked devices → Link a device</b></li>

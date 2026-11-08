@@ -98,7 +98,14 @@ export async function startWhatsApp() {
       const code = lastDisconnect?.error?.output?.statusCode;
       wa.lastError = lastDisconnect?.error?.message || String(code || 'closed');
       if (wa.sock !== sock || unlinking) return; // superseded by a newer socket, or logoutWhatsApp() is handling it
-      if (code === DisconnectReason.loggedOut) {
+      const next = closeAction({ code, message: wa.lastError, linked: !!state.creds?.me });
+      if (next === 'qr_expired') {
+        // Nobody scanned the QR. Stop here instead of making new QR codes forever; the dashboard asks for a new one.
+        wa.status = 'qr_expired'; wa.qr = null; retries = 0;
+        console.log('[wa] QR code expired without being scanned. Open the dashboard and click "Link WhatsApp" to get a new one.');
+        return;
+      }
+      if (next === 'logged_out') {
         console.log('[wa] logged out — clearing session, a new QR will appear');
         wa.status = 'logged_out';
         wa.me = null;
@@ -211,6 +218,13 @@ export async function logoutWhatsApp() {
     reconnectTimer = setTimeout(startWhatsApp, 1500);   // show a fresh QR
   }
   return { confirmed, reason };
+}
+
+/** What to do when the connection closes: 'logged_out' | 'qr_expired' | 'reconnect'. */
+export function closeAction({ code, message = '', linked }) {
+  if (code === DisconnectReason.loggedOut) return 'logged_out';
+  if (!linked && (/QR refs attempts ended/i.test(message) || code === DisconnectReason.timedOut)) return 'qr_expired';
+  return 'reconnect';
 }
 
 export async function restartWhatsApp() {

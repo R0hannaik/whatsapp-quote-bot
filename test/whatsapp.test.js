@@ -185,3 +185,18 @@ describe('unlink', () => {
     assert.match(r.reason, /not connected/);
   });
 });
+
+describe('when the connection closes', () => {
+  const { closeAction } = wam;
+  test('QR not scanned in time → stop and wait for the dashboard (no endless new QR codes)', () => {
+    assert.equal(closeAction({ code: 408, message: 'QR refs attempts ended', linked: false }), 'qr_expired');
+  });
+  test('a linked bot that drops or times out → reconnect', () => {
+    assert.equal(closeAction({ code: 408, message: 'Connection was lost', linked: true }), 'reconnect');
+    assert.equal(closeAction({ code: 428, message: 'Connection Closed', linked: true }), 'reconnect');
+    assert.equal(closeAction({ code: 515, message: 'Stream Errored (restart required)', linked: false }), 'reconnect', 'normal restart right after scanning');
+  });
+  test('unlinked from the phone → clear the session', () => {
+    assert.equal(closeAction({ code: 401, message: 'Connection Failure', linked: true }), 'logged_out');
+  });
+});
