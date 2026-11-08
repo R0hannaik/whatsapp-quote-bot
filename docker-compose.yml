@@ -1,0 +1,37 @@
+# Production setup: the bot + Caddy (automatic HTTPS certificates).
+#   1. Point your domain (e.g. quotes.yourcompany.in) at this server's IP address.
+#   2. Fill in .env (DOMAIN, DASHBOARD_PASSWORD, CONTACT_PHONE …).
+#   3. docker compose up -d --build
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0          # inside the container; only Caddy can reach it
+      PORT: 3000
+      TRUST_PROXY: "1"       # Caddy sits in front → secure cookies, real visitor IPs
+      DATA_DIR: /app/data
+    volumes:
+      - quotebot_data:/app/data      # database, backups and WhatsApp login — survives restarts & updates
+    expose: ["3000"]                 # not published to the internet directly
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [app]
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env, e.g. DOMAIN=quotes.yourcompany.in}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data             # HTTPS certificates
+      - caddy_config:/config
+
+volumes:
+  quotebot_data:
+  caddy_data:
+  caddy_config:

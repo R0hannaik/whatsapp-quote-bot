@@ -44,6 +44,8 @@ npm start                   # → http://localhost:3000
 3. **WhatsApp Groups Monitor → Sync Live Groups**, then switch ON the groups where the bot should quote.
 4. Fill in your **Chemicals & Rates Matrix** and test in **Reply Templates** by typing messages in the preview.
 
+**Putting it on the web (24×7, HTTPS, your own domain):** see **[DEPLOY.md](DEPLOY.md)** — Docker + automatic HTTPS in a few commands, plus how the database is stored, backed up and restored.
+
 Keep it running with pm2: `npm i -g pm2 && pm2 start src/server.js --name quotebot && pm2 save`
 or Docker: `docker build -t quotebot . && docker run -d -p 3000:3000 --env-file .env -v $(pwd)/data:/app/data quotebot`
 
@@ -57,8 +59,8 @@ put it behind HTTPS (Caddy / Nginx / Cloudflare Tunnel) and set `TRUST_PROXY=1`.
   not an official WhatsApp API; automated messaging can get a number restricted. The delays, cooldowns and
   ON-only groups reduce that risk — keep them on.
 - For the rotating join QR, the bot's number must be an **admin** of the group.
-- Everything is stored in `data/` (SQLite database + WhatsApp session). Back up that folder; delete
-  `data/wa-auth` to force a fresh WhatsApp login.
+- Everything is stored in `data/` (SQLite database + WhatsApp session). Daily backups are automatic
+  (*Settings → Database backups*); download one regularly. Delete `data/wa-auth` to force a fresh WhatsApp login.
 
 ## Security
 

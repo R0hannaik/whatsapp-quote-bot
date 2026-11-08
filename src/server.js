@@ -11,6 +11,7 @@ const { initPassword, changePassword, login, logout, logoutEverywhere, requireAu
 const { planReplies, describe, invalidateCatalogue } = await import('./bot.js');
 const { PRESETS, DEFAULT_TEMPLATES, TEMPLATE_VARIABLES, MULTI_VARIABLES } = await import('./presets.js');
 const waMod = await import('./whatsapp.js');
+const backups = await import('./backup.js');
 const { wa } = waMod;
 
 db.ensureSecrets();
@@ -20,7 +21,8 @@ initPassword();
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUB = path.join(ROOT, 'public');
 const app = express();
-app.set('trust proxy', process.env.TRUST_PROXY === '1');
+// Behind one reverse proxy (Caddy/Nginx): trust exactly one hop, so visitors can't fake their IP to dodge the login lockout.
+app.set('trust proxy', process.env.TRUST_PROXY === '1' ? 1 : false);
 app.disable('x-powered-by');
 app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
@@ -62,6 +64,9 @@ const wrap = fn => (req, res) => Promise.resolve().then(() => fn(req, res)).catc
 
 /* ---------------- public ---------------- */
 app.use('/assets', express.static(path.join(PUB, 'assets')));
+// Health check for hosting platforms / Docker (reveals nothing).
+app.get('/healthz', (_req, res) => { try { db.db.prepare('SELECT 1').get(); res.json({ ok: true }); } catch { res.status(500).json({ ok: false }); } });
+
 app.get('/login', (req, res) => isAuthed(req) ? res.redirect('/') : res.sendFile(path.join(PUB, 'login.html')));
 app.post('/api/login', login);
 app.post('/api/logout', logout);
@@ -227,6 +232,8 @@ app.put('/api/settings', wrap((req, res) => {
     if (typeof def === 'number') { v = Number(v); if (!Number.isFinite(v) || v < 0) throw new Error(`Invalid value for ${k}`); }
     if (typeof def === 'boolean') v = !!v;
     if (typeof def === 'string') { v = String(v); if (v.length > 2000) throw new Error(`${k} is too long`); }
+    if (k === 'backup_hour_ist' && (v > 23 || !Number.isInteger(v))) throw new Error('Backup time must be a whole hour from 0 to 23');
+    if (k === 'backup_keep_days' && (v < 1 || v > 365)) throw new Error('Keep between 1 and 365 backups');
     if (k === 'multi_reply_style' && !['combined', 'separate'].includes(v)) throw new Error('multi_reply_style must be combined or separate');
     db.setSetting(k, v);
   }
@@ -234,6 +241,16 @@ app.put('/api/settings', wrap((req, res) => {
   invalidateCatalogue();
   res.json({ settings: db.getSettings() });
 }));
+/* backups */
+app.get('/api/backups', (_req, res) => res.json({ items: backups.listBackups(), hour: db.getSetting('backup_hour_ist'), keep: db.getSetting('backup_keep_days') }));
+app.post('/api/backups', wrap(async (_req, res) => res.json(await backups.createBackup({ manual: true }))));
+app.get('/api/backups/:name', (req, res) => {
+  const p = backups.backupPath(req.params.name);
+  if (!p) return res.status(404).json({ error: 'Backup not found' });
+  res.download(p, req.params.name);
+});
+app.delete('/api/backups/:name', wrap((req, res) => { backups.deleteBackup(req.params.name); res.json({ ok: true }); }));
+
 app.post('/api/settings/logout-all', (req, res) => { logoutEverywhere(); logout(req, res); });
 app.post('/api/settings/password', wrap(async (req, res) => { await changePassword(req.body?.current, req.body?.next); logout(req, res); }));
 
@@ -254,4 +271,15 @@ if (isMain) {
   });
   waMod.startWhatsApp().catch(e => { console.error('[wa] failed to start:', e); wa.status = 'disconnected'; wa.lastError = e.message; });
   waMod.startInviteRotation();
+  backups.startBackupSchedule();
+
+  // Clean shutdown (server restarts, `docker compose down`, deploys): finish writes and close WhatsApp properly.
+  let stopping = false;
+  for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => {
+    if (stopping) return; stopping = true;
+    console.log(`\n  Shutting down (${sig})…`);
+    try { wa.sock?.end(new Error('shutdown')); } catch { /* ignore */ }
+    try { db.db.close(); } catch { /* ignore */ }
+    process.exit(0);
+  });
 }

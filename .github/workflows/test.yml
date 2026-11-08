@@ -14,3 +14,32 @@ jobs:
       - run: npm ci
       - run: npm test            # includes the browser tests (Chrome is preinstalled on GitHub's runners)
       - run: npm audit --omit=dev
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check docker-compose.yml
+        run: DOMAIN=quotes.example.in docker compose config --quiet
+      - name: Build image
+        run: docker build -t quotebot .
+      - name: Start container and wait for it to be healthy
+        run: |
+          docker run -d --name qb -e DASHBOARD_PASSWORD=ci-password-123 -e WA_DISABLED=1 -p 3000:3000 quotebot
+          for i in $(seq 1 30); do
+            s=$(docker inspect -f '{{.State.Health.Status}}' qb); echo "health: $s"
+            [ "$s" = healthy ] && break; sleep 3
+          done
+          [ "$(docker inspect -f '{{.State.Health.Status}}' qb)" = healthy ]
+          curl -fsS http://127.0.0.1:3000/healthz
+          curl -fsS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3000/login
+          docker exec qb sh -c 'test -w /app/data && ls -ld /app/data'
+      - name: Data survives a restart
+        run: |
+          curl -fsS -c c.txt -H 'Content-Type: application/json' -H 'Origin: http://127.0.0.1:3000' -d '{"password":"ci-password-123"}' http://127.0.0.1:3000/api/login
+          curl -fsS -b c.txt -H 'Content-Type: application/json' -H 'Origin: http://127.0.0.1:3000' -d '{"name":"CI Chemical","aliases":"cic","price":1}' http://127.0.0.1:3000/api/chemicals
+          docker restart qb && sleep 8
+          curl -fsS -c c.txt -H 'Content-Type: application/json' -H 'Origin: http://127.0.0.1:3000' -d '{"password":"ci-password-123"}' http://127.0.0.1:3000/api/login
+          curl -fsS -b c.txt http://127.0.0.1:3000/api/chemicals | grep -q "CI Chemical"
+      - if: failure()
+        run: docker logs qb

@@ -139,6 +139,14 @@ describe('dashboard in a browser', { skip }, () => {
     assert.ok(await page.$eval('input[name=contact_phone]', e => e.disabled), 'phone from .env is read-only');
   });
 
+  test('Settings → Database backups: back up now and list it', async () => {
+    await tab('settings'); await wait(300);
+    await page.click('#backupNow'); await wait(800);
+    assert.match(await text('#toasts'), /Backup saved/);
+    assert.match(await text('#backupRows'), /quotebot-.*-manual\.db/);
+    assert.ok(await page.$('#backupRows a[download]'), 'download link shown');
+  });
+
   test('no JavaScript errors anywhere', () => assert.deepEqual(errors, []));
 
   test('log out', async () => {

@@ -779,6 +779,13 @@ async function loadSettings() {
       <button type="button" class="btn btn-danger-soft btn-sm" id="logoutAll">Log out all devices</button>
       <h3 style="margin-top:22px">WhatsApp account</h3>
       <button type="button" class="btn btn-light btn-sm" id="openConn">Connection &amp; QR</button></div>
+    <div class="card card-pad" style="grid-column:1/-1"><h3>Database backups</h3>
+      <p class="muted" style="margin-top:-6px">A copy of everything — chemicals, rates, templates, groups, orders and settings — is saved automatically every day.
+        The WhatsApp login is not included; after restoring a backup, just scan the QR again.</p>
+      <div class="grid3">${num('backup_hour_ist', 'Daily backup time (hour, India time)', '0–23. Default 3 = 3 AM.')}${num('backup_keep_days', 'Keep last … daily backups', 'Older ones are deleted automatically.')}
+        <div class="field"><label>&nbsp;</label><button type="button" class="btn btn-dark btn-sm" id="backupNow">Back up now</button></div></div>
+      <div class="table-wrap" style="max-height:300px;border:1px solid var(--line);border-radius:12px"><table class="data"><thead><tr><th>Backup</th><th>Size</th><th>Created</th><th></th></tr></thead><tbody id="backupRows"></tbody></table></div>
+      <p class="muted" style="font-size:14px;margin-bottom:0">💡 Download a backup now and then and keep it somewhere else (Google Drive, your laptop). Backups stored on the server don't help if the server itself is lost.</p></div>
     <div style="grid-column:1/-1;display:flex;justify-content:flex-end"><button class="btn btn-amber" type="submit">${ICON.save} Save Settings</button></div>
   </form>`;
   $('#setForm').onsubmit = guard(async e => {
@@ -792,6 +799,22 @@ async function loadSettings() {
     toast('Password changed — please log in again'); setTimeout(() => location.href = '/login', 1200);
   });
   $('#openConn').onclick = openConnectionModal;
+  const fmtSize = n => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+  const loadBackups = guard(async () => {
+    const { items } = await api('GET', '/api/backups');
+    $('#backupRows').innerHTML = items.length ? items.map(b => `<tr><td class="mono" style="font-size:13.5px">${esc(b.name)} ${b.manual ? '<span class="badge b-blue">manual</span>' : ''}</td>
+      <td>${fmtSize(b.size)}</td><td>${fmtTime(b.created)}</td>
+      <td style="white-space:nowrap"><a class="btn btn-light btn-sm" href="/api/backups/${encodeURIComponent(b.name)}" download>Download</a>
+        <button type="button" class="link-danger" title="Delete" data-del-backup="${esc(b.name)}">×</button></td></tr>`).join('')
+      : '<tr><td colspan="4" class="empty">No backups yet — the first one is made at the daily backup time, or press “Back up now”.</td></tr>';
+  });
+  loadBackups();
+  $('#backupNow').onclick = guard(async () => { const b = await api('POST', '/api/backups'); toast(`Backup saved: ${b.name}`); loadBackups(); });
+  $('#backupRows').onclick = guard(async e => {
+    const n = e.target.closest('[data-del-backup]')?.dataset.delBackup; if (!n) return;
+    if (!await confirmBox('Delete backup?', `<b>${esc(n)}</b> will be removed from the server.`, 'Delete')) return;
+    await api('DELETE', `/api/backups/${encodeURIComponent(n)}`); toast('Backup deleted'); loadBackups();
+  });
   $('#logoutAll').onclick = guard(async () => {
     if (!await confirmBox('Log out all devices?', 'Everyone signed in to this dashboard (including you) will need to log in again.', 'Log out all')) return;
     await api('POST', '/api/settings/logout-all'); location.href = '/login';

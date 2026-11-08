@@ -1,3 +1,8 @@
 node_modules
 data
 .env
+.git
+.github
+test
+*.md
+!README.md

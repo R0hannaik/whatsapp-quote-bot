@@ -1,0 +1,6 @@
+# Caddy gets and renews the HTTPS certificate for your domain automatically.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy app:3000
+	header -Server
+}

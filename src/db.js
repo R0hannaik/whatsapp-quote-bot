@@ -117,6 +117,8 @@ export const SETTING_DEFAULTS = {
   reply_to_own_messages: false, // test mode: also answer messages typed on the bot's own phone
   ai_enabled: false,
   ai_model: 'claude-haiku-5-5',
+  backup_hour_ist: 3,             // daily database backup time (India time, 0–23)
+  backup_keep_days: 14,           // how many daily backups to keep
 };
 
 /** Settings that come from .env when present (kept out of the code and the database). */
