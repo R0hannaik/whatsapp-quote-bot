@@ -305,3 +305,21 @@ button.badge.pay-badge:hover { filter: brightness(.97); }
 #dWhat { margin-top: 12px; line-height: 2; }
 @media (max-width: 1000px) { .demo-grid { grid-template-columns: 1fr; } .demo-phone .phone-body { height: 460px; } }
 .demo-bar b { color: #1e3a8a; }
+
+/* ---------- trial checklist ---------- */
+.trial-guide { background: #fff; border: 1px solid var(--line); border-left: 4px solid #7c3aed; border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }
+.trial-guide.mini { padding: 6px 12px; border-left-width: 1px; background: transparent; border-style: dashed; }
+.trial-guide .tg-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.trial-guide .tg-head .muted { font-size: 13.5px; }
+.trial-guide .tg-head .link { margin-left: auto; }
+.trial-guide .link { background: none; border: 0; color: var(--ink-2); text-decoration: underline; cursor: pointer; font: inherit; font-size: 13.5px; padding: 0; }
+.tg-steps { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.tg-steps li { display: flex; gap: 10px; align-items: flex-start; color: var(--ink-2); font-size: 14.5px; }
+.tg-steps li > div { flex: 1; }
+.tg-steps li p { margin: 3px 0 0; font-size: 13.5px; color: var(--ink-2); line-height: 1.45; }
+.tg-steps li.done { color: #64748b; }
+.tg-steps li.done b { text-decoration: line-through; font-weight: 500; }
+.tg-steps li.next { background: #f5f3ff; border-radius: 10px; padding: 8px 10px; margin: 2px -10px; color: var(--ink); }
+.tg-n { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12.5px; font-weight: 700; background: #ede9fe; color: #5b21b6; }
+.tg-steps li.done .tg-n { background: #dcfce7; color: #15803d; }
+@media (max-width: 640px) { .tg-steps li { flex-wrap: wrap; } }

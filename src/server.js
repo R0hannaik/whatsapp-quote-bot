@@ -26,6 +26,21 @@ if (DEMO) {
   db.setSetting('password_hash', null);
   if (!process.env.QB_QUIET) console.log(`\n  🎬 DEMO MODE — sample data, simulated WhatsApp. Login password: ${generated ? password : '(DEMO_PASSWORD)'}\n`);
 }
+// Trial: the client links THEIR OWN WhatsApp to try the real bot. Separate data, sample chemicals, Test mode on at first start.
+const TRIAL = !DEMO && process.env.TRIAL_MODE === '1';
+if (TRIAL) {
+  let shown = '(DASHBOARD_PASSWORD)';
+  if (!process.env.DASHBOARD_PASSWORD || process.env.TRIAL_PASSWORD) {
+    const { password, generated } = demo.demoPassword(db.DATA_DIR, fs, path, { env: 'TRIAL_PASSWORD', prefix: 'trial' });
+    process.env.DASHBOARD_PASSWORD = password;
+    shown = generated ? `${password}${db.getSetting('password_hash') ? '  (unless changed in Settings)' : ''}` : '(TRIAL_PASSWORD)';
+  }
+  if (!db.getSetting('trial_initialized')) {
+    db.setSetting('reply_to_own_messages', true);   // so the client can test by typing on their own phone
+    db.setSetting('trial_initialized', true);
+  }
+  if (!process.env.QB_QUIET) console.log(`\n  🧪 TRIAL MODE — link your own WhatsApp and try the real bot. Login password: ${shown}\n`);
+}
 initPassword();
 if (DEMO) { await demo.seedDemo(); demo.attachDemoSocket(); }
 
@@ -131,6 +146,10 @@ app.get('/api/status', (_req, res) => {
     payments: orders.paymentStats(),
     backupProblem: DEMO ? null : backups.backupProblem(),
     demo: DEMO,
+    trial: TRIAL ? {
+      testMode: !!db.getSettings().reply_to_own_messages,
+      quotes: db.db.prepare('SELECT COUNT(*) n FROM inquiries WHERE quote_text IS NOT NULL').get().n,
+    } : null,
   });
 });
 app.get('/api/activity', (_req, res) => res.json(waMod.activity.slice(0, 60)));

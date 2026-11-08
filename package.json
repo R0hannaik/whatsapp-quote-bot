@@ -9,7 +9,8 @@
     "test": "node --test test/*.test.js",
     "test:quick": "node --test test/parser.test.js test/quote.test.js test/bot.test.js test/db.test.js",
     "restore": "node scripts/restore.js",
-    "demo": "node scripts/demo.js"
+    "demo": "node scripts/demo.js",
+    "trial": "node scripts/trial.js"
   },
   "engines": {
     "node": ">=20"

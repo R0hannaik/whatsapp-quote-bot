@@ -119,6 +119,7 @@ async function pollStatus() {
       alert.innerHTML = `<span>⚠️ <b>Backups need attention:</b> ${esc(s.backupProblem)}</span><button class="btn btn-light btn-sm" id="goBackups">Open Settings</button>`;
       $('#goBackups').onclick = () => switchTab('settings');
     } else alert.classList.add('hidden');
+    renderTrialGuide(s);
     const pc = $('#pendingCount');
     const od = s.payments?.overdue?.n || 0;
     $('#overdueCount').textContent = od; $('#overdueCount').classList.toggle('hidden', !od);
@@ -127,6 +128,39 @@ async function pollStatus() {
     if (connModalOpen) renderConnectionModal();
     if (state.tab === 'groups') loadActivity().catch(() => {});
   } catch { /* ignore */ }
+}
+
+/* =========================================================== trial: getting-started checklist */
+const TRIAL_HIDE = 'qb_trial_guide_hidden';
+const lsGet = k => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* private mode */ } };
+function renderTrialGuide(s) {
+  const box = $('#trialGuide');
+  if (!s.trial) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  if (lsGet(TRIAL_HIDE)) {
+    box.className = 'trial-guide mini';
+    box.innerHTML = '<button class="link" id="tgShow">🧪 Show the trial checklist</button>';
+    $('#tgShow').onclick = () => { lsSet(TRIAL_HIDE, null); renderTrialGuide(s); };
+    return;
+  }
+  const linked = s.whatsapp.status === 'open';
+  const steps = [
+    [linked, 'Link your WhatsApp', 'Scan the QR with <b>WhatsApp → Settings → Linked devices → Link a device</b>. You can unlink any time, here or on your phone.', '<button class="btn btn-dark btn-sm" data-tg="link">Link WhatsApp</button>'],
+    [s.counts.groups > 0, 'Sync your groups', 'Every group starts with auto-reply <b>OFF</b> — nothing is sent anywhere until you switch a group on.', '<button class="btn btn-light btn-sm" data-tg="groups">Open Groups</button>'],
+    [s.counts.autoReplyOn > 0, 'Switch ON one test group', 'Best: make a new WhatsApp group (e.g. <i>Quote Bot test</i>) with one family member or colleague, press <b>Sync Live Groups</b>, and turn ON only that group. Keep your buyer groups OFF while testing.', '<button class="btn btn-light btn-sm" data-tg="groups">Open Groups</button>'],
+    [s.trial.quotes > 0, 'Ask for a rate in that group', `From your phone (or your colleague's) send e.g. <b>PA 2 MT Bhiwandi rate</b> or a list of products. The bot replies in a few seconds.${s.trial.testMode ? '' : ' <b>Test mode is OFF</b> — messages from your own phone are ignored; turn it on in Settings, or ask someone else to send.'}`, '<button class="btn btn-light btn-sm" data-tg="chemicals">Your rates</button>'],
+    [false, 'Make it yours', 'Put your own chemicals and prices in the <b>Rates Matrix</b>, change the wording in <b>Reply Templates</b>, then reply <i>confirm</i> to a quote and see it in <b>Orders &amp; Decisions</b>.', '<button class="btn btn-light btn-sm" data-tg="orders">Orders</button>'],
+  ];
+  const next = steps.findIndex(x => !x[0]);
+  box.className = 'trial-guide';
+  box.innerHTML = `<div class="tg-head"><b>🧪 Trial — try the bot with your own WhatsApp</b>
+      <span class="muted">${s.trial.testMode ? 'Test mode is ON: the bot also answers messages you type on this phone (Settings).' : ''}</span>
+      <button class="link" id="tgHide">Hide</button></div>
+    <ol class="tg-steps">${steps.map(([done, title, help, btn], k) => `<li class="${done ? 'done' : k === next ? 'next' : ''}">
+      <span class="tg-n">${done ? '✓' : k + 1}</span><div><b>${title}</b>${k === next ? `<p>${help}</p>` : ''}</div>${k === next ? btn : ''}</li>`).join('')}</ol>`;
+  $('#tgHide').onclick = () => { lsSet(TRIAL_HIDE, '1'); renderTrialGuide(s); };
+  box.querySelectorAll('[data-tg]').forEach(b => b.onclick = () => b.dataset.tg === 'link' ? openConnectionModal() : switchTab(b.dataset.tg));
 }
 
 /* =========================================================== modal helpers */

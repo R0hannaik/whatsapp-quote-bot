@@ -1,6 +1,9 @@
 # Sharing the prototype with a client
 
-Share the **demo**, not your real bot. The demo is a separate copy with sample chemicals, groups, enquiries, orders and
+Two ways: the **demo** (A/B — sample data, simulated WhatsApp, zero risk) or a **trial** (C — the client links their own
+WhatsApp and tests the real bot).
+
+The demo is a separate copy with sample chemicals, groups, enquiries, orders and
 payments, and a **simulated WhatsApp**: your client types as a buyer in **💬 Demo Chat** and watches the real bot logic
 reply. Nothing is sent to real WhatsApp, your real data and `.env` are never used, and no number can get banned.
 
@@ -45,6 +48,56 @@ It prints a link like `https://quiet-river-1234.trycloudflare.com` — send that
 5. Send the client the link and password. Every `git push` to GitHub redeploys the demo automatically.
 
 To take it down: Render dashboard → the service → **Settings → Delete**.
+
+## C. Let the client try it with their own WhatsApp (trial)
+
+`npm run trial` starts a separate copy of the **real** bot: the client links their own WhatsApp by scanning a QR on
+their screen, and real messages in their groups get real replies. It has its own folder (`trial-data/`), its own
+password, sample chemicals to start with, and a step-by-step checklist at the top of the dashboard.
+
+**Before you start, tell the client:**
+- **Their number is at risk, not yours.** This uses WhatsApp's linked-device protocol (not the official API). Low
+  volume testing is low risk, but a number *can* get restricted. Safest: a spare number. At least: test in **one new
+  group** (e.g. *Quote Bot test* with a colleague), keep every buyer group **OFF**.
+- **Their WhatsApp session lives on the computer running the trial** (your Mac or your server). Whoever can log in to
+  the trial dashboard can send messages from their number. So: restrict the link to their email, use the generated
+  password, and end the trial properly (below).
+- Test mode starts **ON**, so they can test by typing on their own phone. Every group starts with auto-reply **OFF**.
+
+**Where to run it:**
+
+| | Your Mac + Cloudflare link | A small server (DEPLOY.md) | Render free |
+|---|---|---|---|
+| Cost | Free | ~₹400–600 / month | Free |
+| Bot answers | Only while your Mac is on and awake | 24×7 | ✗ Sleeps after 15 min idle — the bot stops answering |
+| WhatsApp stays linked | Yes | Yes | ✗ Lost on every restart (no disk) — re-scan each time |
+| WhatsApp sees | A home internet connection (like WhatsApp Web on a PC) | A data-centre address | — |
+| Good for | A trial of a few hours/days | A longer pilot | ✗ Not suitable for the real bot (fine for the demo) |
+
+**Trial from your Mac:**
+```bash
+cd quotebot && git pull && npm install
+npm run trial                 # prints the password (also in trial-data/trial-password.txt) → http://localhost:3200
+```
+In a second Terminal window (update cloudflared first: `brew upgrade cloudflared`):
+```bash
+cloudflared tunnel --url http://localhost:3200 --allowed-mail client@theircompany.com
+```
+Send the client the `https://….trycloudflare.com` link and the password. They get a one-time code by email, log in,
+click **Link WhatsApp**, scan the QR with their phone (*WhatsApp → Settings → Linked devices → Link a device*), then
+follow the checklist. Keep your Mac awake (`caffeinate -d` in a third window).
+
+**On a server for a longer pilot:** follow DEPLOY.md and add `TRIAL_MODE=1` to that server's `.env` (shows the
+checklist and turns on Test mode at the first start). Remove it when they go live.
+
+**Ending the trial:**
+1. The client unlinks: dashboard pill → *Unlink this number* (or on the phone: *Linked devices → Quote Bot (trial) → Log out*).
+2. You press `Ctrl+C` in both windows — the link stops working immediately.
+3. Delete their session and data: `rm -rf trial-data`. (Or, if they're going live, move the folder to their server —
+   chemicals, templates and history carry over.)
+
+You can run the demo (port 3100), the trial (3200) and your own bot (3000) at the same time — each has its own data and
+WhatsApp session.
 
 ## What to tell the client
 

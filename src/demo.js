@@ -162,12 +162,12 @@ export async function seedDemo({ force = false } = {}) {
   return true;
 }
 
-/** Password for the demo: DEMO_PASSWORD if set, else one generated once and kept in the demo data folder. */
-export function demoPassword(dataDir, fs, path) {
-  if (process.env.DEMO_PASSWORD) return { password: process.env.DEMO_PASSWORD, generated: false };
-  const file = path.join(dataDir, 'demo-password.txt');
+/** Password for the demo (or trial): the env var if set, else one generated once and kept in the data folder. */
+export function demoPassword(dataDir, fs, path, { env = 'DEMO_PASSWORD', prefix = 'demo' } = {}) {
+  if (process.env[env]) return { password: process.env[env], generated: false };
+  const file = path.join(dataDir, `${prefix}-password.txt`);
   if (fs.existsSync(file)) return { password: fs.readFileSync(file, 'utf8').trim(), generated: true };
-  const pw = `demo-${crypto.randomBytes(6).toString('base64url')}`;
+  const pw = `${prefix}-${crypto.randomBytes(6).toString('base64url')}`;
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(file, pw, { mode: 0o600 });
   return { password: pw, generated: true };
