@@ -26,7 +26,7 @@ sleep when idle or wipe the disk on restart.
 ## Option A — VPS with Docker (recommended)
 
 ### 1. Get a server and a web address
-1. Create an Ubuntu 24.04 server (India region). Add your SSH key while creating it.
+1. Create an Ubuntu 24.04 server (India region — click-by-click for DigitalOcean Bangalore: **DIGITALOCEAN.md**). Add your SSH key while creating it.
 2. In your domain's DNS settings, add an **A record**: `quotes` → *your server's IP address*.
    (Any domain works: `quotes.yourcompany.in`, `bot.example.com`, …)
 

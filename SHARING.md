@@ -51,46 +51,29 @@ To take it down: Render dashboard → the service → **Settings → Delete**.
 
 ## C. Let the client try it with their own WhatsApp (trial)
 
-`npm run trial` starts a separate copy of the **real** bot: the client links their own WhatsApp by scanning a QR on
-their screen, and real messages in their groups get real replies. It has its own folder (`trial-data/`), its own
-password, sample chemicals to start with, and a step-by-step checklist at the top of the dashboard.
+The trial is the **real** bot: the client links their own WhatsApp by scanning a QR on their screen, and real
+messages in their groups get real replies. It has its own password, sample chemicals to start with, and a
+step-by-step checklist at the top of the dashboard. Host it on **DigitalOcean** (recommended,
+[DIGITALOCEAN.md](DIGITALOCEAN.md)) or run `npm run trial` on your Mac (own `trial-data/` folder).
 
 **Before you start, tell the client:**
 - **Their number is at risk, not yours.** This uses WhatsApp's linked-device protocol (not the official API). Low
   volume testing is low risk, but a number *can* get restricted. Safest: a spare number. At least: test in **one new
   group** (e.g. *Quote Bot test* with a colleague), keep every buyer group **OFF**.
-- **Their WhatsApp session lives wherever the trial runs** (Render, your Mac or your server). Whoever can log in to
+- **Their WhatsApp session lives wherever the trial runs** (the DigitalOcean server or your Mac). Whoever can log in to
   the trial dashboard can send messages from their number. So: use a long random password (only the client gets
   it), restrict the Mac link to their email, and end the trial properly (below).
 - Test mode starts **ON**, so they can test by typing on their own phone. Every group starts with auto-reply **OFF**.
 
 **Where to run it:**
 
-| | **Hosted on Render** (recommended) | Your Mac + Cloudflare link | Your own server (DEPLOY.md) |
-|---|---|---|---|
-| Cost | ~US$7.25 / month (≈ ₹650) | Free | ~₹400–600 / month |
-| Set-up | ~10 min in the browser, no server to manage | 2 min | ~30 min, you look after the server |
-| Bot answers | 24×7 | Only while your Mac is on and awake | 24×7 |
-| WhatsApp stays linked | Yes (1 GB disk) | Yes | Yes |
-| Updates | Automatic on every `git push` | `git pull` + restart | `git pull` + rebuild |
-| Link | `https://quotebot-trial.onrender.com` (fixed) | Changes every run | Your own domain |
-
-(Render's *free* plan doesn't work for the trial: it sleeps after 15 minutes — the bot stops answering — and has no
-disk, so WhatsApp unlinks on every restart. It's fine for the sample-data demo in B.)
-
-**Hosted trial on Render:**
-1. Sign in at **render.com** with GitHub and add a card (Billing).
-2. **New → Blueprint** → choose `whatsapp-quote-bot` → set **Blueprint file** to `render-trial.yaml`.
-3. Render asks for **DASHBOARD_PASSWORD** (the client's login — use 12+ random characters) and, optionally,
-   **CONTACT_PHONE**. Click **Apply** and wait for the first build (~5 min).
-4. Open `https://quotebot-trial.onrender.com` (the exact link is at the top of the service page), log in, and check
-   the checklist appears. Send the client the link and the password.
-5. The client clicks **Link WhatsApp** and scans the QR with their phone. Done — it keeps running on its own.
-
-Notes: a password typed into Render is used only at the first start; after that change it in *Settings → Security*.
-Each `git push` redeploys with ~30 s of downtime (the disk can't be shared between two copies), and WhatsApp reconnects by
-itself. To end it: client unlinks, then Render → the service → *Settings → Delete* (this deletes the disk and their
-WhatsApp session too).
+| | **DigitalOcean, Bangalore** (recommended) | Your Mac + Cloudflare link |
+|---|---|---|
+| Cost | $6/month — free for the first 60 days on a new account | Free |
+| Bot answers | 24×7 | Only while your Mac is on and awake |
+| WhatsApp sees | An Indian address | Your home connection |
+| Link | Your own (e.g. `https://proto-pawan-chemicals.zero7.space`) | Changes every run |
+| How | **[DIGITALOCEAN.md](DIGITALOCEAN.md)** — ~20 min in the browser, one install command | Below |
 
 **Trial from your Mac:**
 ```bash
@@ -105,8 +88,7 @@ Send the client the `https://….trycloudflare.com` link and the password. They 
 click **Link WhatsApp**, scan the QR with their phone (*WhatsApp → Settings → Linked devices → Link a device*), then
 follow the checklist. Keep your Mac awake (`caffeinate -d` in a third window).
 
-**On your own server:** follow DEPLOY.md and add `TRIAL_MODE=1` to that server's `.env` (shows the
-checklist and turns on Test mode at the first start). Remove it when they go live.
+**On another server:** run the same install command (DIGITALOCEAN.md step 4) and answer `y` to *client trial*.
 
 **Ending a trial on your Mac:**
 1. The client unlinks: dashboard pill → *Unlink this number* (or on the phone: *Linked devices → Quote Bot (trial) → Log out*).
@@ -122,7 +104,7 @@ WhatsApp session.
 The bot must run **all the time** (it holds a live connection to WhatsApp) and needs a **disk** (database + WhatsApp
 login). Most "free hosting" sleeps or has no disk, so it only suits the demo. These do work:
 
-| | DigitalOcean | Oracle Cloud *Always Free* | Google Cloud *e2-micro* |
+| | **DigitalOcean** (recommended — DIGITALOCEAN.md) | Oracle Cloud *Always Free* | Google Cloud *e2-micro* |
 |---|---|---|---|
 | Price | **$200 credit for 60 days** for new accounts, then from ~$6/month | **Free, no end date** | **Free, no end date** |
 | Server | Any size within the credit (1 GB is plenty) | Arm: 2 cores / 12 GB total, or 2 small AMD VMs (1 GB) | 1 small VM (1 GB RAM, 30 GB disk) |
@@ -134,7 +116,7 @@ Not suitable for the real bot (fine for the demo): Render free and Koyeb free (s
 Hugging Face Spaces (sleeps; Docker needs a paid plan), Back4app (60-minute containers), Vercel / Netlify /
 Cloudflare Pages (no always-running process).
 
-**Set-up on any of them (≈15 minutes):**
+**Set-up on any of them (≈15 minutes)** — DigitalOcean click-by-click: **[DIGITALOCEAN.md](DIGITALOCEAN.md)**:
 1. Create an **Ubuntu 24.04** server (Oracle Arm: the *aarch64* image works) with your SSH key, and note its IP.
 2. Web address: add a DNS **A record** pointing at that IP — e.g. `proto-pawan-chemicals.yourdomain.com`
    (if you own `zero7.space`, add `proto-pawan-chemicals` in Hostinger's DNS zone). No domain? Press Enter when the script
