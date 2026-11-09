@@ -30,6 +30,12 @@ sleep when idle or wipe the disk on restart.
 2. In your domain's DNS settings, add an **A record**: `quotes` → *your server's IP address*.
    (Any domain works: `quotes.yourcompany.in`, `bot.example.com`, …)
 
+**Shortcut:** steps 2 and 3 in one command (asks for the domain, generates a password, starts everything):
+```bash
+curl -fsSL https://raw.githubusercontent.com/R0hannaik/whatsapp-quote-bot/main/scripts/install-server.sh | sudo bash
+```
+Free servers that work for this (DigitalOcean credit, Oracle Always Free, Google e2-micro): see SHARING.md → *D*.
+
 ### 2. Prepare the server (one time)
 ```bash
 ssh root@YOUR_SERVER_IP

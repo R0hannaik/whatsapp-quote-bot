@@ -57,3 +57,42 @@ jobs:
           [ "$(sudo stat -c %a /tmp/rootdisk)" = 700 ]
       - if: failure()
         run: docker logs qb; docker logs qb2 || true
+
+  installer:                     # the one-command server set-up, run on a fresh Ubuntu machine
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck scripts/install-server.sh scripts/docker-entrypoint.sh
+      - name: Run install-server.sh (trial, local copy of this commit)
+        run: |
+          sudo git config --global --add safe.directory '*'      # cloning the runner's checkout as root
+          sudo env REPO="$GITHUB_WORKSPACE" DOMAIN=localhost TRIAL=1 CONTACT_PHONE='+91 90000 00000' bash scripts/install-server.sh < /dev/null
+      - name: Dashboard answers over HTTPS through Caddy
+        run: |
+          for i in $(seq 1 30); do curl -kfsS https://localhost/healthz && break; sleep 3; done
+          curl -kfsS https://localhost/healthz
+          curl -kfsS -o /dev/null -w "%{http_code}\n" https://localhost/login
+          sudo test "$(sudo stat -c %a /opt/quotebot/.env)" = 600
+          sudo grep -q '^TRIAL_MODE=1' /opt/quotebot/.env
+          sudo grep -Eq '^DASHBOARD_PASSWORD=[0-9a-f]{24}$' /opt/quotebot/.env
+      - name: Running it again keeps the password and data
+        run: |
+          before=$(sudo grep '^DASHBOARD_PASSWORD=' /opt/quotebot/.env)
+          sudo env REPO="$GITHUB_WORKSPACE" bash scripts/install-server.sh < /dev/null
+          [ "$(sudo grep '^DASHBOARD_PASSWORD=' /opt/quotebot/.env)" = "$before" ]
+          curl -kfsS https://localhost/healthz
+      - if: failure()
+        run: cd /opt/quotebot && sudo docker compose logs
+
+  docker-arm64:                  # Oracle Cloud's free Ampere servers are ARM
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t quotebot .
+      - run: |
+          docker run -d --name qb -e DASHBOARD_PASSWORD=ci-password-123 -e WA_DISABLED=1 -p 3000:3000 quotebot
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3000/healthz && break; sleep 2; done
+          curl -fsS http://127.0.0.1:3000/healthz
+          [ "$(docker exec qb uname -m)" = aarch64 ]
+      - if: failure()
+        run: docker logs qb

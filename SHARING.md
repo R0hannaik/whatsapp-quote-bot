@@ -117,6 +117,38 @@ checklist and turns on Test mode at the first start). Remove it when they go liv
 You can run the demo (port 3100), the trial (3200) and your own bot (3000) at the same time — each has its own data and
 WhatsApp session.
 
+## D. Free (or free-to-start) servers
+
+The bot must run **all the time** (it holds a live connection to WhatsApp) and needs a **disk** (database + WhatsApp
+login). Most "free hosting" sleeps or has no disk, so it only suits the demo. These do work:
+
+| | DigitalOcean | Oracle Cloud *Always Free* | Google Cloud *e2-micro* |
+|---|---|---|---|
+| Price | **$200 credit for 60 days** for new accounts, then from ~$6/month | **Free, no end date** | **Free, no end date** |
+| Server | Any size within the credit (1 GB is plenty) | Arm: 2 cores / 12 GB total, or 2 small AMD VMs (1 GB) | 1 small VM (1 GB RAM, 30 GB disk) |
+| Location | **Bangalore** (Indian IP) | **Mumbai / Hyderabad** (Indian IP) | USA only (Oregon, Iowa, S. Carolina) |
+| Catch | Card needed; not free after 60 days | Card needed; "out of capacity" for Arm is common; Oracle may **reclaim idle** free VMs (CPU, network and — on Arm — memory all under 20% for 7 days, which a light bot can hit). Upgrading the account to *Pay-As-You-Go* (still ₹0 within the free limits) is the usual fix | Card needed; only 1 GB/month outbound traffic free (fine for a trial) |
+| Ease | Easiest | Hardest sign-up and network set-up | Medium |
+
+Not suitable for the real bot (fine for the demo): Render free and Koyeb free (sleep, no disk), Fly.io (trial only),
+Hugging Face Spaces (sleeps; Docker needs a paid plan), Back4app (60-minute containers), Vercel / Netlify /
+Cloudflare Pages (no always-running process).
+
+**Set-up on any of them (≈15 minutes):**
+1. Create an **Ubuntu 24.04** server (Oracle Arm: the *aarch64* image works) with your SSH key, and note its IP.
+2. Web address: add a DNS **A record** pointing at that IP — e.g. `proto-pawan-chemicals.yourdomain.com`
+   (if you own `zero7.space`, add `proto-pawan-chemicals` in Hostinger's DNS zone). No domain? Press Enter when the script
+   asks and it uses `<ip>.sslip.io`, which needs no DNS (an IP-based name — fine for a prototype).
+3. Log in and run **one command** (it asks for the address and whether it's a client trial):
+   ```bash
+   ssh root@YOUR_SERVER_IP          # Oracle/Google: ssh ubuntu@… and the command runs with sudo
+   curl -fsSL https://raw.githubusercontent.com/R0hannaik/whatsapp-quote-bot/main/scripts/install-server.sh | sudo bash
+   ```
+   It sets up swap, Docker, the firewall, automatic security updates and HTTPS, generates a strong password and
+   prints the link + password. Oracle only: also open ports 80 and 443 in the subnet's *Security List* (the script reminds you).
+4. Open the link, log in, send the client the link + password. Running the command again later updates the bot and
+   keeps the data and password.
+
 ## What to tell the client
 
 1. Log in with the password.
