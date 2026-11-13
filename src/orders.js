@@ -2,7 +2,7 @@
 // An order belongs to the chat (group or private) where it was placed. While it is Pending, the buyer gets a
 // payment reminder there on day (credit_days − reminder_days_before_due) — day 28 for 30-day credit — and then
 // every `reminder_repeat_days` days until the owner marks it Paid.
-import { db, getSetting, getSettings, getInquiry, updateInquiry } from './db.js';
+import { db, getSetting, getSettings, getInquiry, updateInquiry, currentAccount, formatAccount } from './db.js';
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS orders (
@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(payment_status, next_reminder_date);
 `);
+// The WhatsApp number the order belongs to: reminders are only ever sent from that number ('' = not known yet).
+if (!db.prepare('PRAGMA table_info(orders)').all().some(c => c.name === 'account')) db.exec("ALTER TABLE orders ADD COLUMN account TEXT NOT NULL DEFAULT ''");
 
 /* ---------------- dates (India time, as YYYY-MM-DD strings) ---------------- */
 export const todayIST = (now = Date.now()) => new Date(now + 330 * 60000).toISOString().slice(0, 10);
@@ -108,7 +110,7 @@ function clean(input, existing = {}) {
   return o;
 }
 
-const COLS = ['inquiry_id', 'order_message', 'chat_jid', 'chat_name', 'chat_type', 'customer_name', 'customer_phone', 'customer_jid', 'msg_key', 'product', 'quantity', 'rate',
+const COLS = ['account', 'inquiry_id', 'order_message', 'chat_jid', 'chat_name', 'chat_type', 'customer_name', 'customer_phone', 'customer_jid', 'msg_key', 'product', 'quantity', 'rate',
   'amount', 'invoice_no', 'order_date', 'credit_days', 'due_date', 'payment_status', 'paid_date', 'reminders_enabled', 'reminders_sent',
   'last_reminder_date', 'next_reminder_date', 'last_error', 'notes', 'history'];
 
@@ -129,6 +131,8 @@ const event = (o, text, by = 'owner') => { o.history = [...(o.history || []), { 
 
 export function createOrder(input) {
   const o = clean(input);
+  // same number as the enquiry it came from; otherwise the number linked now
+  o.account = (o.inquiry_id && getInquiry(o.inquiry_id)?.account) || currentAccount();
   o.payment_status = 'Pending';
   o.reminders_sent = 0;
   o.next_reminder_date = nextReminderDate(o);
@@ -177,8 +181,9 @@ export const pendingInquiryIds = () => db.prepare("SELECT DISTINCT inquiry_id FR
 
 export const deleteOrder = id => db.prepare('DELETE FROM orders WHERE id = ?').run(id);
 
-export function listOrders({ status = 'Pending', q } = {}) {
+export function listOrders({ status = 'Pending', q, account } = {}) {
   const where = []; const p = { today: todayIST() };
+  if (account && account !== 'all') { where.push('account = @account'); p.account = String(account).slice(0, 100); }
   if (status === 'Pending' || status === 'Paid') { where.push('payment_status = @status'); p.status = status; }
   if (status === 'Overdue') where.push("payment_status = 'Pending' AND due_date < @today");
   if (status === 'DueSoon') { where.push("payment_status = 'Pending' AND due_date >= @today AND due_date <= @soon"); p.soon = addDays(p.today, 7); }
@@ -196,9 +201,16 @@ export function paymentStats(today = todayIST()) {
   return { pending, overdue, dueSoon: soon, paidThisMonth: paid };
 }
 
-/** Orders whose reminder is due today (or was missed while the bot was offline). */
-export const remindersDue = (today = todayIST()) => db.prepare(`SELECT * FROM orders WHERE payment_status = 'Pending' AND reminders_enabled = 1
-  AND next_reminder_date IS NOT NULL AND next_reminder_date <= ? AND (last_reminder_date IS NULL OR last_reminder_date < ?) ORDER BY due_date`).all(today, today).map(hydrate);
+/** Orders whose reminder is due today (or was missed while the bot was offline) — only those of the number linked now:
+ *  another number's orders wait until that number is linked again (they're never sent from the wrong number). */
+export const remindersDue = (today = todayIST(), account = currentAccount()) => db.prepare(`SELECT * FROM orders WHERE payment_status = 'Pending' AND reminders_enabled = 1
+  AND account = ? AND next_reminder_date IS NOT NULL AND next_reminder_date <= ? AND (last_reminder_date IS NULL OR last_reminder_date < ?) ORDER BY due_date`).all(account, today, today).map(hydrate);
+
+/** Why this order's reminders can't go out from the number linked now (null = they can). */
+export function wrongNumber(o, account = currentAccount()) {
+  if (!o?.account || o.account === account) return null;
+  return `This order belongs to WhatsApp number ${formatAccount(o.account)}. Reminders wait until that number is linked again.`;
+}
 
 export function markReminderSent(id, { manual = false } = {}) {
   const o = getOrder(id);

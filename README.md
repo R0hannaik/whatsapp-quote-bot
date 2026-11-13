@@ -30,6 +30,9 @@ How the bot decides:
   Orders → Unmatched. Every product gets its own row in Orders, linked as one enquiry. Settings can switch to one
   message per product.
 - Cooldown per person + chemical, and a per-group cap, to keep the number safe.
+- **Switching numbers** (*Unlink* → link another phone): each number keeps its own groups; every enquiry and order
+  remembers the number it came in on (shown as 📱 tags + a filter once you've used more than one). Replies and payment
+  reminders only ever go out from that number — another number's reminders wait until it's linked again.
 
 ## Run it
 
@@ -97,7 +100,7 @@ Your part:
 ## Tests
 
 ```bash
-npm test            # everything (~1 min): 239 checks
+npm test            # everything (~1 min): 253 checks
 npm run test:quick  # just message reading, quotes, replies and database (a few seconds)
 ```
 
@@ -112,6 +115,7 @@ npm run test:quick  # just message reading, quotes, replies and database (a few 
 | `test/offsite.test.js` | Data protection: encryption, tamper detection, verified backups, off-site upload/restore with a fake S3, no deletes |
 | `test/payments.test.js` / `test/orders-api.test.js` | Orders, payment reminder schedule and sending, order/follow-up detection |
 | `test/demo.test.js` | Demo mode: sample data, simulated WhatsApp, Demo Chat replies and hand-offs, risky actions switched off, reset, demo password |
+| `test/accounts.test.js` | Switching WhatsApp numbers: enquiries/orders keep their number, replies and payment reminders only from that number, filters |
 | `test/trial.test.js` | Trial mode: own password, sample chemicals, Test mode on at first start only, client can unlink |
 | `test/ui.test.js` | Clicks through the dashboard in headless Chrome (skipped if Chrome isn't installed; set `CHROME_PATH` to use another) |
 

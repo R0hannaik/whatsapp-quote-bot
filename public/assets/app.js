@@ -95,7 +95,7 @@ async function pollStatus() {
     const account = s.whatsapp.me?.id ?? null;
     if (account !== prevAccount && (account || st === 'logged_out') && ['groups', 'join'].includes(state.tab)) guard(LOADERS[state.tab])();
     $('#waPill').dataset.status = st;
-    $('#waPillText').textContent = s.demo ? 'Simulated WhatsApp (demo)' : st === 'open' && s.whatsapp.me ? `Connected · +${(s.whatsapp.me.id || '').split('@')[0]}` : WA_TEXT[st] || st;
+    $('#waPillText').textContent = s.demo ? 'Simulated WhatsApp (demo)' : st === 'open' && s.whatsapp.me ? `Connected · ${(() => { const a = (s.accounts || []).find(x => x.current); return a ? (a.name && s.accounts.length > 1 ? `${a.name} · ${a.phone}` : a.phone) : `+${(s.whatsapp.me.id || '').split('@')[0]}`; })()}` : WA_TEXT[st] || st;
     const alert = $('#connAlert');
     $('#demoTab').classList.toggle('hidden', !s.demo);
     if (s.demo) {
@@ -655,16 +655,39 @@ const preview = debounce(guard(async () => {
   $('#tplAnalysis').innerHTML = chips.length ? `<span class="faint" style="font-size:13.5px;align-self:center">Bot understood:</span>${chips.join('')}` : '';
 }), 220);
 
+/* =========================================================== WhatsApp numbers (enquiries & orders are tagged with theirs) */
+const accounts = () => state.status?.accounts || [];
+const multiNumbers = () => accounts().length > 1;
+const currentNumber = () => state.status?.whatsapp?.me?.id || '';
+function numberLabel(id) {
+  const a = accounts().find(x => x.id === id);
+  if (!a) return '';
+  return a.name ? `${a.name} (${a.phone})` : a.phone;
+}
+/** Small "📱 +91 …" tag — only shown once more than one number has been used here. */
+function numTag(id) {
+  if (!id || !multiNumbers()) return '';
+  const cur = id === currentNumber();
+  return `<span class="num-tag ${cur ? 'cur' : ''}" title="${cur ? 'The WhatsApp number linked now' : 'Another WhatsApp number — not linked now'}">📱 ${esc(numberLabel(id))}</span>`;
+}
+/** "All numbers / +91 … (linked)" filter — only when there's more than one. */
+function numberFilter(selId, value) {
+  if (!multiNumbers()) return '';
+  return `<select class="input num-filter" id="${selId}" title="Which WhatsApp number">
+    <option value="all">📱 All numbers</option>${accounts().map(a => `<option value="${esc(a.id)}" ${a.id === value ? 'selected' : ''}>${esc(a.name ? `${a.name} · ${a.phone}` : a.phone)}${a.current ? ' (linked)' : ''}</option>`).join('')}</select>`;
+}
+
 /* =========================================================== ORDERS & DECISIONS */
 async function loadOrders() {
-  const qs = new URLSearchParams({ status: state.orderFilter.status, q: state.orderFilter.q, ...(state.orderFilter.batch ? { batch: state.orderFilter.batch } : {}) });
+  const qs = new URLSearchParams({ status: state.orderFilter.status, q: state.orderFilter.q, ...(state.orderFilter.batch ? { batch: state.orderFilter.batch } : {}),
+    ...(state.orderFilter.account && state.orderFilter.account !== 'all' ? { account: state.orderFilter.account } : {}) });
   state.orders = await api('GET', `/api/inquiries?${qs}`);
   const v = $('#view-orders');
   if (!v.dataset.ready) {
     v.innerHTML = `<div class="stats" id="ordStats"></div>
       <div class="card">
         <div class="banner info">🧑‍💼 <div><b>You make the final call.</b> The bot only sends indicative quotes. Every enquiry it answers lands here — confirm, negotiate, hold or reject it yourself, and optionally reply in the group from this screen.</div></div>
-        <div class="toolbar"><div class="status-pills" id="ordPills"></div><div class="spacer"></div>
+        <div class="toolbar"><div class="status-pills" id="ordPills"></div><div class="spacer"></div><span id="ordNumWrap"></span>
           <div class="search" style="max-width:340px">${ICON.search}<input class="input" id="ordSearch" placeholder="Search message, chemical, group, phone…"></div></div>
         <div class="table-wrap"><table class="data"><thead><tr><th>Received</th><th>Group &amp; Sender</th><th>Message</th><th>Chemical / Qty</th><th>Quoted</th><th>Decision</th><th></th></tr></thead>
         <tbody id="ordRows"></tbody></table></div></div>`;
@@ -674,6 +697,7 @@ async function loadOrders() {
       const b = e.target.closest('[data-st]'); if (b) { state.orderFilter.status = b.dataset.st; delete state.orderFilter.batch; loadOrders(); }
     };
     $('#ordSearch').oninput = debounce(e => { state.orderFilter.q = e.target.value; loadOrders(); }, 300);
+    $('#ordNumWrap').onchange = e => { if (e.target.id === 'ordNum') { state.orderFilter.account = e.target.value; loadOrders(); } };
     $('#ordRows').addEventListener('change', guard(async e => {
       const sel = e.target.closest('select[data-status]'); if (!sel) return;
       await api('PATCH', `/api/inquiries/${sel.dataset.status}`, { status: sel.value }); toast(`Marked as ${sel.value}`); loadOrders(); pollStatus();
@@ -696,10 +720,11 @@ async function loadOrders() {
   $('#ordPills').innerHTML = state.orderFilter.batch
     ? `<span class="spill active">🧾 Showing one multi-product enquiry</span><button class="spill" data-clear-batch>✕ Back to all</button>`
     : pills.map(([k, l]) => `<button class="spill ${state.orderFilter.status === k ? 'active' : ''}" data-st="${esc(k)}">${esc(l)}</button>`).join('');
+  $('#ordNumWrap').innerHTML = numberFilter('ordNum', state.orderFilter.account);
   const items = state.orders.items;
   $('#ordRows').innerHTML = items.length ? items.map(i => `<tr>
     <td style="white-space:nowrap">${fmtTime(i.created_at)}</td>
-    <td><div style="font-weight:600">${esc(i.group_name || '—')}</div><div class="sub">${esc(i.sender_name || '')} ${i.sender_phone ? `· ${esc(i.sender_phone)}` : ''}</div></td>
+    <td><div style="font-weight:600">${esc(i.group_name || '—')}</div><div class="sub">${esc(i.sender_name || '')} ${i.sender_phone ? `· ${esc(i.sender_phone)}` : ''}</div>${numTag(i.account)}</td>
     <td class="msg-cell"><div class="txt">${esc(i.message)}</div></td>
     <td>${i.chemical_name ? `<div style="font-weight:600">${esc(i.chemical_name)}</div>` : `<span class="badge b-gray">Not in matrix</span>${i.requested_text ? ` <b>${esc(i.requested_text)}</b>` : ''}`}<div class="sub">${esc([i.quantity, i.location, i.origin].filter(Boolean).join(' · '))}</div>
       ${i.batch_size > 1 ? `<button class="link-btn batch-link" data-batch="${esc(i.batch_key)}" title="Show all products from this message">🧾 ${i.batch_size}-product enquiry</button>` : ''}</td>
@@ -711,6 +736,7 @@ async function loadOrders() {
 
 function openOrderModal(id) {
   const i = state.orders.items.find(x => x.id === id); if (!i) return;
+  const otherNumber = !!(i.account && currentNumber() && i.account !== currentNumber()) || !!(i.account && !currentNumber() && multiNumbers());
   const quick = [
     ['✅ Confirm', () => `✅ *Order Confirmed*\n${i.chemical_name || ''}${$('#oQty').value ? ` – ${$('#oQty').value}` : ''}${$('#oRate').value ? `\nRate: ${$('#oRate').value}` : ''}\nOur team will share dispatch details shortly. 🙏`],
     ['📞 Call me', () => `Thanks for the enquiry 🙏 Please call ${state.settings?.contact_phone || 'us'} to finalise the best rate.`],
@@ -721,7 +747,7 @@ function openOrderModal(id) {
       <div class="grid2">
         <div>
           <span class="flabel">Customer message</span>
-          <div class="wa-preview"><div class="bubble" style="max-width:100%;margin:0"><div class="who">${esc(i.sender_name || '')} ${esc(i.sender_phone || '')}</div>${waFormat(i.message)}<div class="meta">${fmtTime(i.created_at)} · ${esc(i.group_name || '')}</div></div>
+          <div class="wa-preview"><div class="bubble" style="max-width:100%;margin:0"><div class="who">${esc(i.sender_name || '')} ${esc(i.sender_phone || '')}</div>${waFormat(i.message)}<div class="meta">${fmtTime(i.created_at)} · ${esc(i.group_name || '')}${multiNumbers() && i.account ? ` · received on ${esc(numberLabel(i.account))}` : ''}</div></div>
           ${i.quote_text ? `<div class="bubble out" style="max-width:100%;margin:12px 0 0">${waFormat(i.quote_text)}<div class="meta">Bot · ${i.intent === 'deal' ? 'Deal template' : 'Price Quotation'}</div></div>` : ''}</div>
         </div>
         <div>
@@ -738,9 +764,10 @@ function openOrderModal(id) {
       <hr style="border:0;border-top:1px solid var(--line);margin:24px 0">
       <div class="grid2">
         <div><span class="flabel">Reply in the group (as the bot number)</span>
+          ${otherNumber ? `<div class="banner warn" style="margin-bottom:10px">📱 <div>This enquiry came in on <b>${esc(numberLabel(i.account) || 'another number')}</b>, which isn't linked now. Link that number to reply from it.</div></div>` : ''}
           <div class="chips" style="margin-bottom:8px">${quick.map((q, k) => `<button class="btn btn-light btn-sm" data-quick="${k}">${q[0]}</button>`).join('')}</div>
           <textarea class="input" id="oMsg" rows="4" placeholder="Type a message… it will be sent quoting the customer's original message."></textarea>
-          <div style="margin-top:10px"><button class="btn btn-green btn-sm" id="oSend" ${i.group_jid ? '' : 'disabled'}>Send in group</button></div></div>
+          <div style="margin-top:10px"><button class="btn btn-green btn-sm" id="oSend" ${i.group_jid && !otherNumber ? '' : 'disabled'}>Send in group</button></div></div>
         <div><span class="flabel">History</span><div class="timeline">${i.history.map(timelineEvent).join('')}</div></div>
       </div>
     </div>
@@ -1057,7 +1084,8 @@ function dueBadge(o, today = istToday()) {
 state.payFilter = { status: 'Pending', q: '' };
 
 async function loadPayments() {
-  const qs = new URLSearchParams(state.payFilter);
+  const { account, ...pf } = state.payFilter;
+  const qs = new URLSearchParams({ ...pf, ...(account && account !== 'all' ? { account } : {}) });
   const data = await api('GET', `/api/orders?${qs}`);
   state.pay = data;
   const v = $('#view-payments');
@@ -1067,13 +1095,14 @@ async function loadPayments() {
         <div class="banner info">🔔 <div><b>Payment reminders:</b> for every Pending order the buyer gets a reminder in the chat where the order was placed
           — first on <b>day ${(state.settings?.default_credit_days || 30) - (state.settings?.reminder_days_before_due ?? 2)}</b>, then every
           <b>${state.settings?.reminder_repeat_days || 2} days</b> until you mark it <b>Paid</b>. Change the timing in Settings and the message in Reply Templates.</div></div>
-        <div class="toolbar"><div class="status-pills" id="payPills"></div><div class="spacer"></div>
+        <div class="toolbar"><div class="status-pills" id="payPills"></div><div class="spacer"></div><span id="payNumWrap"></span>
           <div class="search" style="max-width:340px">${ICON.search}<input class="input" id="paySearch" placeholder="Search buyer, product, invoice…"></div></div>
         <div class="table-wrap"><table class="data"><thead><tr><th>Order date</th><th>Buyer &amp; chat</th><th>Material</th><th class="right">Amount</th><th>Due</th><th>Reminders</th><th>Payment</th><th></th></tr></thead>
         <tbody id="payRows"></tbody></table></div></div>`;
     v.dataset.ready = 1;
     $('#payPills').onclick = e => { const b = e.target.closest('[data-pst]'); if (b) { state.payFilter.status = b.dataset.pst; loadPayments(); } };
     $('#paySearch').oninput = debounce(e => { state.payFilter.q = e.target.value; loadPayments(); }, 300);
+    $('#payNumWrap').onchange = e => { if (e.target.id === 'payNum') { state.payFilter.account = e.target.value; loadPayments(); } };
     $('#payRows').addEventListener('change', guard(async e => {
       const sel = e.target.closest('select[data-pay]'); if (!sel) return;
       await api('POST', `/api/orders/${sel.dataset.pay}/status`, { status: sel.value });
@@ -1090,13 +1119,14 @@ async function loadPayments() {
   ].map(([k, v, sub, c]) => `<div class="stat ${c}"><div class="k">${k}</div><div class="v">${v}</div><div class="sub">${sub}</div></div>`).join('');
   $('#payPills').innerHTML = [['Pending', 'Pending'], ['Overdue', 'Overdue'], ['DueSoon', 'Due this week'], ['Paid', 'Paid'], ['all', 'All']]
     .map(([k, l]) => `<button class="spill ${state.payFilter.status === k ? 'active' : ''}" data-pst="${k}">${l}</button>`).join('');
+  $('#payNumWrap').innerHTML = numberFilter('payNum', state.payFilter.account);
   $('#payRows').innerHTML = data.items.length ? data.items.map(o => `<tr>
     <td style="white-space:nowrap">${fmtDay(o.order_date)}${o.invoice_no ? `<div class="sub">${esc(o.invoice_no)}</div>` : ''}</td>
-    <td><div style="font-weight:600">${esc(o.customer_name || '—')}</div><div class="sub">${o.chat_type === 'group' ? '👥' : '💬'} ${esc(o.chat_name || o.chat_jid)}</div></td>
+    <td><div style="font-weight:600">${esc(o.customer_name || '—')}</div><div class="sub">${o.chat_type === 'group' ? '👥' : '💬'} ${esc(o.chat_name || o.chat_jid)}</div>${numTag(o.account)}</td>
     <td><div>${esc(o.product)}</div><div class="sub">${esc([o.quantity, o.rate].filter(Boolean).join(' · '))}</div></td>
     <td class="right rate-big">${rupees(o.amount)}</td>
     <td style="white-space:nowrap"><div>${fmtDay(o.due_date)}</div>${dueBadge(o, data.today)}</td>
-    <td style="white-space:nowrap"><div>${o.reminders_sent} sent</div><div class="sub">${o.payment_status === 'Paid' ? '—' : !o.reminders_enabled ? '⏸ paused' : o.next_reminder_date ? `next ${fmtDay(o.next_reminder_date)}` : '—'}</div>
+    <td style="white-space:nowrap"><div>${o.reminders_sent} sent</div><div class="sub">${o.payment_status === 'Paid' ? '—' : !o.reminders_enabled ? '⏸ paused' : o.waiting_for_number ? `<span title="${esc(o.waiting_for_number)}">⏳ waits for ${esc(numberLabel(o.account) || 'its number')}</span>` : o.next_reminder_date ? `next ${fmtDay(o.next_reminder_date)}` : '—'}</div>
       ${o.last_error ? `<div class="sub" style="color:var(--red)" title="${esc(o.last_error)}">⚠ last attempt failed</div>` : ''}</td>
     <td><select class="input status-select badge ${o.payment_status === 'Paid' ? 'b-green' : 'b-amber'}" data-pay="${o.id}">${['Pending', 'Paid'].map(x => `<option ${x === o.payment_status ? 'selected' : ''}>${x}</option>`).join('')}</select></td>
     <td><button class="btn btn-light btn-sm" data-open-order="${o.id}">Open</button></td></tr>`).join('')
@@ -1125,6 +1155,8 @@ async function openPaymentOrderModal(id, fromInquiry = null) {
     : `<div class="input" style="background:var(--soft)">${esc(v.chat_type === 'group' ? v.chat_name || v.chat_jid : (inq?.group_name || 'the group'))}</div>`;
   const m = openModal(`<div class="modal-head"><h3>${isNew ? '📦 Record Order' : `Order #${o.id} · ${esc(o.customer_name || '')}`}</h3><button class="x" data-close>×</button></div>
     <form class="modal-body" id="poForm" autocomplete="off">
+      ${o?.waiting_for_number ? `<div class="banner warn" style="margin-bottom:16px">📱 <div>This order was placed on <b>${esc(numberLabel(o.account))}</b>, which isn't linked now. Its reminders are <b>on hold</b> and go out from that number as soon as it's linked again — never from a different number.</div></div>` : ''}
+      ${isNew && multiNumbers() && currentNumber() && !inq ? `<div class="help" style="margin:-4px 0 14px">📱 This order will belong to <b>${esc(numberLabel(currentNumber()))}</b> (the number linked now) — its reminders are sent from that number.</div>` : ''}
       ${inq ? `<div class="wa-preview" style="margin-bottom:18px"><div class="bubble" style="max-width:100%;margin:0"><div class="who">${esc(inq.sender_name || '')} ${esc(inq.sender_phone || '')}</div>${waFormat(inq.message || '')}<div class="meta">${esc(inq.group_name || '')}</div></div></div>` : ''}
       <div class="grid2">
         <div class="field"><label>Buyer name</label><input class="input" name="customer_name" value="${esc(v.customer_name || '')}"></div>
@@ -1152,7 +1184,7 @@ async function openPaymentOrderModal(id, fromInquiry = null) {
     </form>
     <div class="modal-foot">
       ${o ? `<button class="link-danger" id="poDel" style="font-size:15px">Delete</button>` : ''}<div class="push"></div>
-      ${o && o.payment_status === 'Pending' ? `<button class="btn btn-light" id="poRemind">🔔 Send reminder now</button><button class="btn btn-green" id="poPaid">✅ Mark Paid</button>` : ''}
+      ${o && o.payment_status === 'Pending' ? `<button class="btn btn-light" id="poRemind" ${o.waiting_for_number ? `disabled title="${esc(o.waiting_for_number)}"` : ''}>🔔 Send reminder now</button><button class="btn btn-green" id="poPaid">✅ Mark Paid</button>` : ''}
       ${o && o.payment_status === 'Paid' ? `<button class="btn btn-light" id="poUnpaid">Mark Pending again</button>` : ''}
       <button class="btn btn-dark" id="poSave">${isNew ? 'Save order' : 'Save changes'}</button></div>`, { size: 'lg' });
 

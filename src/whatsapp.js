@@ -13,7 +13,7 @@ import {
 } from './db.js';
 import { planReplies } from './bot.js';
 import { normalize, hasPhrase } from './parser.js';
-import { findRecentInquiry, flagInquiry } from './db.js';
+import { findRecentInquiry, flagInquiry, currentAccount, formatAccount } from './db.js';
 
 const AUTH_DIR = path.join(DATA_DIR, 'wa-auth');
 const logger = pino({ level: process.env.WA_LOG_LEVEL || 'warn' });
@@ -89,7 +89,7 @@ export async function startWhatsApp() {
       wa.qr = null;
       wa.lastError = null;
       wa.me = { id: jidNormalizedUser(sock.user?.id), lid: sock.user?.lid, name: sock.user?.name || sock.user?.verifiedName || '' };
-      setCurrentAccount(wa.me.id);   // show this number's groups (a different number won't see the old ones)
+      setCurrentAccount(wa.me.id, wa.me.name);   // show this number's groups (a different number won't see the old ones)
       setTimeout(() => runPaymentReminders().catch(e => console.warn('[pay] reminder run failed:', e.message)), 30000).unref?.();
       console.log('[wa] connected as', wa.me.id);
       syncGroups().catch(e => console.warn('[wa] group sync failed:', e.message));
@@ -422,6 +422,8 @@ function rememberSent(id, text) {
 /** Owner follow-up from the Orders screen, quoting the original enquiry when we have it. */
 export async function sendOwnerMessage(inquiry, text) {
   if (wa.status !== 'open') throw new Error('WhatsApp is not connected');
+  if (inquiry.account && inquiry.account !== currentAccount())
+    throw new Error(`This enquiry came in on WhatsApp number ${formatAccount(inquiry.account)}. Link that number to reply from it.`);
   const k = inquiry.msg_key;
   const quoted = k ? { key: k, message: { conversation: inquiry.message || '' } } : undefined;
   rememberSent(null, text);
@@ -468,7 +470,7 @@ export function startInviteRotation() {
 }
 
 /* ------------------------------------------------------------------ payment reminders */
-import { remindersDue, markReminderSent, markReminderFailed, reminderVars, hourIST, getOrder } from './orders.js';
+import { remindersDue, markReminderSent, markReminderFailed, reminderVars, hourIST, getOrder, wrongNumber } from './orders.js';
 import { render } from './quote.js';
 
 /** The reminder text for an order (also used by the dashboard preview). */
@@ -481,6 +483,8 @@ export async function sendPaymentReminder(orderOrId, { manual = false } = {}) {
   const o = typeof orderOrId === 'object' ? orderOrId : getOrder(orderOrId);
   if (!o) throw new Error('Order not found');
   if (wa.status !== 'open') throw new Error('WhatsApp is not connected');
+  const wrong = wrongNumber(o);
+  if (wrong) throw new Error(wrong);   // never remind a buyer from a number they didn't order on
   const text = reminderText(o);
   const quoted = o.msg_key && o.msg_key.remoteJid === o.chat_jid
     ? { key: o.msg_key, message: { conversation: o.order_message || '' } } : null;
@@ -509,6 +513,7 @@ export async function runPaymentReminders({ now = Date.now() } = {}) {
   try {
     for (const o of remindersDue()) {
       if (wa.status !== 'open') break;
+      if (wrongNumber(o)) continue;   // belongs to another number: waits until that one is linked
       if (await sendPaymentReminder(o)) sent++;
       await sleep(rand(3, 8) * 1000 * (process.env.QB_FAST ? 0 : 1));   // space them out
     }

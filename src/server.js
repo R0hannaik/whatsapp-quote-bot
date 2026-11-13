@@ -144,6 +144,7 @@ app.get('/api/status', (_req, res) => {
     },
     stats: db.inquiryStats(),
     payments: orders.paymentStats(),
+    accounts: db.listAccounts(),   // every WhatsApp number linked here (enquiries/orders are tagged with theirs)
     backupProblem: DEMO ? null : backups.backupProblem(),
     demo: DEMO,
     trial: TRIAL ? {
@@ -273,11 +274,12 @@ app.post('/api/inquiries/:id/message', wrap(async (req, res) => {
 }));
 app.get('/api/inquiries.csv', (req, res) => {
   const rows = db.listInquiries({ ...req.query, limit: 50000 });
-  const cols = ['id', 'created_at', 'group_name', 'sender_name', 'sender_phone', 'message', 'chemical_name', 'quantity', 'location', 'origin', 'intent', 'quoted_rate', 'status', 'final_rate', 'final_qty', 'owner_notes'];
+  const cols = ['id', 'created_at', 'whatsapp_number', 'group_name', 'sender_name', 'sender_phone', 'message', 'chemical_name', 'quantity', 'location', 'origin', 'intent', 'quoted_rate', 'status', 'final_rate', 'final_qty', 'owner_notes'];
   // Prefix cells that Excel would treat as formulas (=, +, -, @) — WhatsApp text is untrusted.
   const esc = v => { let t = String(v ?? ''); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return `"${t.replace(/"/g, '""')}"`; };
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename="orders.csv"');
+  for (const r of rows) r.whatsapp_number = db.formatAccount(r.account);
   res.send('﻿' + [cols.join(','), ...rows.map(r => cols.map(c => esc(r[c])).join(','))].join('\n'));
 });
 
@@ -333,7 +335,11 @@ function orderInput(body, existing) {
   }
   return b;
 }
-app.get('/api/orders', (req, res) => res.json({ items: orders.listOrders({ status: String(req.query.status || 'Pending'), q: req.query.q }), stats: orders.paymentStats(), today: orders.todayIST() }));
+app.get('/api/orders', (req, res) => {
+  const items = orders.listOrders({ status: String(req.query.status || 'Pending'), q: req.query.q, account: req.query.account });
+  for (const o of items) o.waiting_for_number = orders.wrongNumber(o);   // another number's order: reminders on hold
+  res.json({ items, stats: orders.paymentStats(), today: orders.todayIST() });
+});
 app.post('/api/orders', wrap((req, res) => res.json(orders.createOrder(orderInput(req.body || {})))));
 app.patch('/api/orders/:id', wrap((req, res) => {
   const cur = orders.getOrder(Number(req.params.id)); if (!cur) throw new Error('Order not found');

@@ -323,3 +323,11 @@ button.badge.pay-badge:hover { filter: brightness(.97); }
 .tg-n { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12.5px; font-weight: 700; background: #ede9fe; color: #5b21b6; }
 .tg-steps li.done .tg-n { background: #dcfce7; color: #15803d; }
 @media (max-width: 640px) { .tg-steps li { flex-wrap: wrap; } }
+
+/* ---------- WhatsApp number tags (more than one number used) ---------- */
+.num-tag { display: inline-block; margin-top: 4px; font-size: 12px; font-weight: 600; color: #64748b; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.num-tag.cur { color: #15803d; background: #f0fdf4; border-color: #bbf7d0; }
+.num-filter { width: auto; max-width: 260px; margin-right: 10px; }
+.banner.warn { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+.banner.warn b { color: #78350f; }
+.modal-body .banner, .card .banner.warn { border: 1px solid; border-radius: 10px; padding: 12px 14px; }

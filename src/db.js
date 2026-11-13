@@ -93,6 +93,8 @@ CREATE INDEX IF NOT EXISTS idx_inq_created ON inquiries(created_at);
   if (!have.has('batch_key')) db.exec('ALTER TABLE inquiries ADD COLUMN batch_key TEXT');            // same message → same key
   if (!have.has('batch_size')) db.exec('ALTER TABLE inquiries ADD COLUMN batch_size INTEGER');       // products asked in that message
   if (!have.has('requested_text')) db.exec('ALTER TABLE inquiries ADD COLUMN requested_text TEXT');  // e.g. "DOP" when not in the matrix
+  if (!have.has('account')) db.exec("ALTER TABLE inquiries ADD COLUMN account TEXT NOT NULL DEFAULT ''");  // WhatsApp number that received it ('' = not known yet)
+  db.exec('CREATE INDEX IF NOT EXISTS idx_inq_account ON inquiries(account)');
 }
 
 /* ---------------- settings ---------------- */
@@ -244,12 +246,39 @@ export const deleteChemical = id => db.prepare('DELETE FROM chemicals WHERE id =
 
 /** The WhatsApp number currently linked (e.g. 9198…@s.whatsapp.net), or '' when none. */
 export const currentAccount = () => getSetting('wa_account') || '';
-export function setCurrentAccount(account) {
+export function setCurrentAccount(account, name) {
   setSetting('wa_account', account || '');
   if (account) {   // groups saved before this update belong to the first number that links
     db.prepare("UPDATE OR IGNORE groups SET account = ? WHERE account = '__legacy__'").run(account);
     db.prepare("DELETE FROM groups WHERE account = '__legacy__'").run();
+    // enquiries/orders saved before numbers were tracked (or while none was linked) belong to the next number that links
+    db.prepare("UPDATE inquiries SET account = ? WHERE account = ''").run(account);
+    if (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'orders'").get()) db.prepare("UPDATE orders SET account = ? WHERE account = ''").run(account);
+    const names = getSetting('account_names') || {};
+    if (!(account in names) || (name && names[account] !== name)) setSetting('account_names', { ...names, [account]: name || names[account] || '' });
   }
+}
+
+/** "919876543210@s.whatsapp.net" → "+91 98765 43210" */
+export function formatAccount(jid) {
+  const n = String(jid || '').split('@')[0].split(':')[0].replace(/\D/g, '');
+  if (!n) return '';
+  if (n.length === 12 && n.startsWith('91')) return `+91 ${n.slice(2, 7)} ${n.slice(7)}`;
+  return `+${n}`;
+}
+/** Every WhatsApp number that has been linked here, with what belongs to it. */
+export function listAccounts() {
+  const cur = currentAccount();
+  const names = getSetting('account_names') || {};
+  const hasOrders = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'orders'").get();
+  const ids = new Set([...Object.keys(names), ...(cur ? [cur] : []),
+    ...db.prepare("SELECT DISTINCT account FROM inquiries WHERE account != ''").all().map(r => r.account),
+    ...(hasOrders ? db.prepare("SELECT DISTINCT account FROM orders WHERE account != ''").all().map(r => r.account) : [])]);
+  return [...ids].map(id => ({
+    id, phone: formatAccount(id), name: names[id] || '', current: id === cur,
+    enquiries: db.prepare('SELECT COUNT(*) n FROM inquiries WHERE account = ?').get(id).n,
+    pendingOrders: hasOrders ? db.prepare("SELECT COUNT(*) n FROM orders WHERE account = ? AND payment_status = 'Pending'").get(id).n : 0,
+  })).sort((a, b) => b.current - a.current || a.phone.localeCompare(b.phone));
 }
 
 const hydrateGroup = g => g && ({ ...g, auto_reply: !!g.auto_reply, is_admin: !!g.is_admin, join_qr: !!g.join_qr, left_group: !!g.left_group });
@@ -314,19 +343,19 @@ export function createInquiry(i) {
   i = row;
   const history = [{ at: new Date().toISOString(), by: 'bot', text: history_text || (i.status === 'Unmatched' ? 'Request received, no chemical matched' : `Auto-quote sent (${i.intent === 'deal' ? 'Deal & Negotiation' : 'Price Quotation'})`) }];
   const info = db.prepare(`INSERT INTO inquiries(group_jid, group_name, sender_jid, sender_name, sender_phone, message, msg_key, chemical_id,
-      chemical_name, quantity, location, origin, intent, quote_text, quoted_rate, status, history, batch_key, batch_size, requested_text)
+      chemical_name, quantity, location, origin, intent, quote_text, quoted_rate, status, history, batch_key, batch_size, requested_text, account)
     VALUES(@group_jid, @group_name, @sender_jid, @sender_name, @sender_phone, @message, @msg_key, @chemical_id, @chemical_name,
-      @quantity, @location, @origin, @intent, @quote_text, @quoted_rate, @status, @history, @batch_key, @batch_size, @requested_text)`).run({
+      @quantity, @location, @origin, @intent, @quote_text, @quoted_rate, @status, @history, @batch_key, @batch_size, @requested_text, @account)`).run({
     group_jid: null, group_name: null, sender_jid: null, sender_name: null, sender_phone: null, message: null, chemical_id: null,
     chemical_name: null, quantity: null, location: null, origin: null, intent: null, quote_text: null, quoted_rate: null,
-    batch_key: null, batch_size: null, requested_text: null,
+    batch_key: null, batch_size: null, requested_text: null, account: currentAccount(),
     ...i, msg_key: i.msg_key ? JSON.stringify(i.msg_key) : null, history: JSON.stringify(history),
   });
   return info.lastInsertRowid;
 }
 export const getInquiry = id => hydrateInquiry(db.prepare('SELECT * FROM inquiries WHERE id = ?').get(id));
 
-export function listInquiries({ status, q, from, to, batch, ids, limit = 500 } = {}) {
+export function listInquiries({ status, q, from, to, batch, ids, account, limit = 500 } = {}) {
   limit = Math.min(Math.max(parseInt(limit, 10) || 500, 1), 50000);
   q = q ? String(q).slice(0, 100) : '';
   const where = []; const p = {};
@@ -337,6 +366,7 @@ export function listInquiries({ status, q, from, to, batch, ids, limit = 500 } =
   }
   if (q) { where.push('(message LIKE @q OR chemical_name LIKE @q OR requested_text LIKE @q OR group_name LIKE @q OR sender_name LIKE @q OR sender_phone LIKE @q OR owner_notes LIKE @q)'); p.q = `%${q}%`; }
   if (batch) { where.push('batch_key = @batch'); p.batch = String(batch).slice(0, 100); }
+  if (account && account !== 'all') { where.push('account = @account'); p.account = String(account).slice(0, 100); }
   if (from) { where.push("date(created_at, '+330 minutes') >= @from"); p.from = from; }
   if (to) { where.push("date(created_at, '+330 minutes') <= @to"); p.to = to; }
   const sql = `SELECT * FROM inquiries ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ${limit}`;
@@ -369,9 +399,9 @@ export function updateInquiry(id, patch, by = 'owner') {
 /** The latest enquiry from this person in this chat that the bot answered (for follow-ups / orders). */
 export function findRecentInquiry(chatJid, senderJid, withinHours = 7 * 24) {
   if (!chatJid || !senderJid) return null;
-  return hydrateInquiry(db.prepare(`SELECT * FROM inquiries WHERE group_jid = ? AND sender_jid = ?
+  return hydrateInquiry(db.prepare(`SELECT * FROM inquiries WHERE group_jid = ? AND sender_jid = ? AND account IN (?, '')
       AND status IN ('Quoted','Negotiating','Awaiting Owner','On Hold') AND created_at >= datetime('now', ?)
-    ORDER BY id DESC LIMIT 1`).get(chatJid, senderJid, `-${Number(withinHours)} hours`));
+    ORDER BY id DESC LIMIT 1`).get(chatJid, senderJid, currentAccount(), `-${Number(withinHours)} hours`));
 }
 
 /** Hand an enquiry to the owner: status → Awaiting Owner, log the buyer's new message, remember it for replies. */
